@@ -1,6 +1,6 @@
 package bios9.gallagher
 
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
@@ -9,7 +9,8 @@ class GallagherCredentialTest {
 
     @Test
     fun `valid credential creation should succeed`() {
-        val credential = GallagherCredential.create(regionCode = 3u, facilityCode = 100u, cardNumber = 500000u, issueLevel = 2u)
+        val credential =
+            GallagherCredential.create(regionCode = 3u, facilityCode = 100u, cardNumber = 500000u, issueLevel = 2u)
 
         assertEquals(3u.toUByte(), credential.regionCode)
         assertEquals(100u.toUShort(), credential.facilityCode)
@@ -29,7 +30,11 @@ class GallagherCredentialTest {
 
         for ((regionCode, expectedLetter) in testCases) {
             val credential = GallagherCredential.create(regionCode.toUByte(), 100u, 500000u, 2u)
-            assertEquals(expectedLetter, credential.regionCodeLetter, "Expected $expectedLetter for region code $regionCode")
+            assertEquals(
+                expectedLetter,
+                credential.regionCodeLetter,
+                "Expected $expectedLetter for region code $regionCode"
+            )
         }
     }
 
@@ -59,8 +64,12 @@ class GallagherCredentialTest {
 
     @Test
     fun `toString should correctly format output`() {
-        val credential = GallagherCredential.create(regionCode = 3u, facilityCode = 45u, cardNumber = 123456u, issueLevel = 2u)
-        assertEquals("GallagherCredential(regionCode=3 (D), facilityCode=45, cardNumber=123456, issueLevel=2)", credential.toString())
+        val credential =
+            GallagherCredential.create(regionCode = 3u, facilityCode = 45u, cardNumber = 123456u, issueLevel = 2u)
+        assertEquals(
+            "GallagherCredential(regionCode=3 (D), facilityCode=45, cardNumber=123456, issueLevel=2)",
+            credential.toString()
+        )
     }
 
     @Test

@@ -9,7 +9,7 @@ import bios9.rfid.mifare.exceptions.*
  * And https://www.nxp.com/docs/en/application-note/AN10787.pdf
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-class MifareApplicationDirectory private constructor (
+class MifareApplicationDirectory private constructor(
     val multiApplicationCard: Boolean,
     val cardPublisherSector: UByte?
 ) {
@@ -51,7 +51,8 @@ class MifareApplicationDirectory private constructor (
             }
 
             // CRC calculation for MADv1 sector 0.
-            val expectedCrc0 = sector0[16]; // Expected CRC is offset by 16 bytes of manufacturer data in sector 0 (UID etc.).
+            // Expected CRC is offset by 16 bytes of manufacturer data in sector 0 (UID etc.).
+            val expectedCrc0 = sector0[16]
             if (Crc8Mad.compute(sector0.sliceArray(17..32)) != expectedCrc0) {
                 throw InvalidMadCrcException(0)
             }
@@ -62,10 +63,10 @@ class MifareApplicationDirectory private constructor (
 
             // Sector 16 needs to be provided for MADv2
             if (madVersion == 2u.toUByte()) {
-                requireNotNull(sector16) { "MAD version was 2 but sector 16 is null."}
+                requireNotNull(sector16) { "MAD version was 2 but sector 16 is null." }
 
                 // CRC calculation for MADv2 sector 16.
-                val expectedCrc16 = sector16[0]; // First byte in sector 16 is the CRC.
+                val expectedCrc16 = sector16[0] // First byte in sector 16 is the CRC.
                 if (Crc8Mad.compute(sector0.sliceArray(1..47)) != expectedCrc16) {
                     throw InvalidMadCrcException(16)
                 }
@@ -86,13 +87,13 @@ class MifareApplicationDirectory private constructor (
          * @param byte Info byte from MAD sector.
          * @return 6 bit pointer to the Card Publisher Sector (CPS).
          */
-        private fun decodeInfoByte(byte : UByte, madVersion: Int): UByte {
+        private fun decodeInfoByte(byte: UByte, madVersion: Int): UByte {
             require(madVersion in 1..2) { "MAD version must be 1 or 2." }
 
             val infoByte = byte and 0x3Fu // Bits 6 and 7 are reserved, so ignore.
 
             // Spec says 0x10 and 0x28..0x3F shall not be used.
-            if (infoByte == 0x10u.toUByte() || infoByte in 0x28u.toUByte() .. 0x3Fu.toUByte()) {
+            if (infoByte == 0x10u.toUByte() || infoByte in 0x28u.toUByte()..0x3Fu.toUByte()) {
                 throw InvalidMadInfoByteException(infoByte, madVersion)
             }
 

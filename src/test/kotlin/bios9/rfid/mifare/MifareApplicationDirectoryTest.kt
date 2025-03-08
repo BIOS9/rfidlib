@@ -1,6 +1,6 @@
 package bios9.rfid.mifare
 
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Test
 
 @OptIn(ExperimentalUnsignedTypes::class)

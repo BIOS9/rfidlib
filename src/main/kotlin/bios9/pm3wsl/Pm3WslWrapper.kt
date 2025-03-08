@@ -6,10 +6,10 @@ class Pm3WslWrapper(
     val pm3Port: String = "/dev/ttyACM0"        // Proxmark serial port within WSL2
 ) {
     data class Hf14aTag(
-        val uid:    ByteArray,
-        val atqa:   ByteArray,
-        val sak:    Byte,
-        val ats:    ByteArray
+        val uid: ByteArray,
+        val atqa: ByteArray,
+        val sak: Byte,
+        val ats: ByteArray
     )
 
     fun runCommand(command: String): String {
@@ -35,7 +35,7 @@ class Pm3WslWrapper(
         runCommand("hw ping")
     }
 
-    fun getTagDetails() : Hf14aTag {
+    fun getTagDetails(): Hf14aTag {
         val strResult = runCommand("hf 14a reader")
 
         val uidRegex = """\[\+\]  UID:\s+([\dA-F ]+)""".toRegex()

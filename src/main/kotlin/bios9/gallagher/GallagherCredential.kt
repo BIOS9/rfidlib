@@ -83,8 +83,10 @@ class GallagherCredential private constructor(
 
             // Extract the bits from various places in the 8 bytes to form each of the cardholder credential values.
             val regionCode = ((substituted[3] and 0x1Fu).toUInt() shr 1).toUByte()
-            val facilityCode = (((substituted[5] and 0x0Fu).toUInt() shl 12) or (substituted[1].toUInt() shl 4) or ((substituted[7] and 0xF0u).toUInt() shr 4)).toUShort()
-            val cardNumber = (substituted[0].toUInt() shl 16) or ((substituted[4] and 0x1Fu).toUInt() shl 11) or (substituted[2].toUInt() shl 3) or (substituted[3].toUInt() shr 5)
+            val facilityCode =
+                (((substituted[5] and 0x0Fu).toUInt() shl 12) or (substituted[1].toUInt() shl 4) or ((substituted[7] and 0xF0u).toUInt() shr 4)).toUShort()
+            val cardNumber =
+                (substituted[0].toUInt() shl 16) or ((substituted[4] and 0x1Fu).toUInt() shl 11) or (substituted[2].toUInt() shl 3) or (substituted[3].toUInt() shr 5)
             val issueLevel = substituted[7] and 0x0Fu
 
             return create(regionCode, facilityCode, cardNumber, issueLevel)

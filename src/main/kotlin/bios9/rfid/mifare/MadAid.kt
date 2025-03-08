@@ -6,16 +6,17 @@ package bios9.rfid.mifare
  * Registered function cluster codes can be found in https://www.nxp.com/docs/en/application-note/AN10787.pdf
  */
 class MadAid private constructor(
-    val rawValue : UShort,
-    val functionClusterCode : UByte,
-    val applicationCode : UByte
+    val rawValue: UShort,
+    val functionClusterCode: UByte,
+    val applicationCode: UByte
 ) {
     companion object {
-        fun fromFunction(functionClusterCode: UByte, applicationCode: UByte) : MadAid {
+        fun fromFunction(functionClusterCode: UByte, applicationCode: UByte): MadAid {
             return MadAid(
                 (applicationCode.toUInt() or (functionClusterCode.toUInt() shl 8)).toUShort(),
                 functionClusterCode,
-                applicationCode)
+                applicationCode
+            )
         }
 
         fun fromRaw(rawValue: UShort): MadAid {
@@ -120,5 +121,6 @@ class MadAid private constructor(
     }
 
     // If the function cluster is zero, the application code is treated as an administration code according to the spec.
-    val administrationCode : AdministrationCode? = if (functionClusterCode == 0u.toUByte()) AdministrationCode.fromApplicationCode(applicationCode) else null
+    val administrationCode: AdministrationCode? =
+        if (functionClusterCode == 0u.toUByte()) AdministrationCode.fromApplicationCode(applicationCode) else null
 }
