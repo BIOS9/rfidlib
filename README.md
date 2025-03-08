@@ -47,3 +47,8 @@ I want an easy way to view and create Gallagher credentials on various technolog
 
 This readme was really hastily written and I'm just trying to get ideas on paper so I can fix it all up later.
 This project in general is still very much a work in progress, and doesn't actually do much yet.
+
+## Acknowledgements
+
+* [Proxmark3 Iceman Fork](https://github.com/RfidResearchGroup/proxmark3) - I've used a lot of this code as reference materal for my Kotlin implementation, and I've also been using it as a test oracle (I hope there are no bugs :]).
+* [Megabug Gallagher Research](https://github.com/megabug/gallagher-research) - I've based my implementation of the Gallagher stuff on this fantastic research.
