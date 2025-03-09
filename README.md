@@ -20,8 +20,6 @@ In future I plan to implement concrete reader implementations for the following:
 
 I have currently only implemented a small and janky version of the Proxmark3 WSL interface for development.
 
-Note some readers support 13.56MHz, but don't support sending arbitrary data to a tag and only support sending something like ISO 7816-4 APDUs. This is the case for Android and means it won't be possible to talk to all HF cards with an Android phone, but we should be able to do everything that supports ISO 7816-4 APDU either natively like PIV or wrapped like DesFire/Plus. We can also still do Mifare Classic since Android has a separate API for that.
-
 ### Card Technology
 
 There are many card technologies like Mifare Classic, Mifare DesFire, HID Prox, PIV, etc.
