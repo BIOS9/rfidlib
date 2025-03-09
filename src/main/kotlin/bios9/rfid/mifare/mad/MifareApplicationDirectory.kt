@@ -1,6 +1,6 @@
 package bios9.rfid.mifare.mad
 
-import bios9.rfid.mifare.exceptions.*
+import bios9.rfid.mifare.mad.exceptions.*
 
 /**
  * Mifare Application Directory (MAD) decoding and encoding.

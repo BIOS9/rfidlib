@@ -1,4 +1,4 @@
-package bios9.rfid.mifare.exceptions
+package bios9.rfid.mifare.mad.exceptions
 
 class InvalidMadCrcException(
     sector: Int

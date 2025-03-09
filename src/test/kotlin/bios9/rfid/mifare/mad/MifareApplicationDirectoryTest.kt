@@ -1,6 +1,6 @@
 package bios9.rfid.mifare.mad
 
-import bios9.rfid.mifare.exceptions.*
+import bios9.rfid.mifare.mad.exceptions.*
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Test
