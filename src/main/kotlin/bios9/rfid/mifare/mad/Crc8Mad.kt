@@ -1,4 +1,4 @@
-package bios9.rfid.mifare
+package bios9.rfid.mifare.mad
 
 /**
  * Mifare Application Directory (MAD) Cyclic Redundancy Check (CRC) calculation.

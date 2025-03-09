@@ -1,4 +1,4 @@
-package bios9.rfid.mifare
+package bios9.rfid.mifare.mad
 
 import bios9.rfid.mifare.exceptions.*
 
@@ -11,22 +11,34 @@ import bios9.rfid.mifare.exceptions.*
 @OptIn(ExperimentalUnsignedTypes::class)
 class MifareApplicationDirectory private constructor(
     val multiApplicationCard: Boolean,
-    val cardPublisherSector: UByte?
+    val cardPublisherSector: UByte?,
+    val applications: Map<MadAid, Int>
 ) {
     companion object {
-        fun create(multiApplicationCard: Boolean, cardPublisherSector: UByte?): MifareApplicationDirectory {
-            return MifareApplicationDirectory(multiApplicationCard, cardPublisherSector)
+        fun create(multiApplicationCard: Boolean, cardPublisherSector: UByte?, applications: Map<MadAid, Int>): MifareApplicationDirectory {
+            return MifareApplicationDirectory(multiApplicationCard, cardPublisherSector, applications)
         }
 
         /**
-         * Decode and validate Mifare Application Directory (MAD) sectors 0 and 16 from a Mifare tag.
+         * Decode and validate Mifare Application Directory (MAD) version 1 sectors 0 and 16 from a Mifare tag.
+         *
+         * @param sector0 64 byte sector 0 from a Mifare tag which includes MADv1 data.
+         */
+        fun decode(sector0: UByteArray) : MifareApplicationDirectory {
+            return decode(sector0, null)
+        }
+
+        /**
+         * Decode and validate Mifare Application Directory (MAD) version 2 sectors 0 and 16 from a Mifare tag.
          *
          * @param sector0 64 byte sector 0 from a Mifare tag which includes MADv1 data.
          * @param sector16 Optional 64 byte sector 16 from a Mifare tag which includes additional MADv2 data.
          */
         fun decode(sector0: UByteArray, sector16: UByteArray?): MifareApplicationDirectory {
             require(sector0.size == 64) { "Invalid sector0 length: ${sector0.size}. Length must be 64 bytes." }
-            require(sector16?.size == 64) { "Invalid sector16 length: ${sector16?.size}. Length must be 64 bytes." }
+            if (sector16 != null) {
+                require(sector16?.size == 64) { "Invalid sector16 length: ${sector16?.size}. Length must be 64 bytes." }
+            }
 
             val generalPurposeByte: UByte = sector0[(3 * 16) + 9]
 
@@ -53,13 +65,22 @@ class MifareApplicationDirectory private constructor(
             // CRC calculation for MADv1 sector 0.
             // Expected CRC is offset by 16 bytes of manufacturer data in sector 0 (UID etc.).
             val expectedCrc0 = sector0[16]
-            if (Crc8Mad.compute(sector0.sliceArray(17..32)) != expectedCrc0) {
+            if (Crc8Mad.compute(sector0.sliceArray(17..47)) != expectedCrc0) {
                 throw InvalidMadCrcException(0)
             }
 
             // Decode info byte, if it's non-zero, set the Card Publisher Sector (CPS).
-            val sector0InfoByte = decodeInfoByte(sector0[17], 0)
+            val sector0InfoByte = decodeInfoByte(sector0[17], 1)
             var cardPublisherSector = if (sector0InfoByte == 0u.toUByte()) null else sector0InfoByte
+
+            val sector0Aids: Map<MadAid, Int> = sector0
+                .slice(18 .. 47)
+                .chunked(2)
+                .mapIndexed { index, uBytes ->
+                    val aid = MadAid.fromRaw(uBytes[0], uBytes[1])
+                    aid to index + 1
+                }
+                .toMap()
 
             // Sector 16 needs to be provided for MADv2
             if (madVersion == 2u.toUByte()) {
@@ -72,13 +93,25 @@ class MifareApplicationDirectory private constructor(
                 }
 
                 // Use the MADv2 CPS if it's present and non-zero.
-                val sector16InfoByte = decodeInfoByte(sector16[1], 16)
+                val sector16InfoByte = decodeInfoByte(sector16[1], 2)
                 if (sector16InfoByte != 0u.toUByte()) {
                     cardPublisherSector = sector16InfoByte
                 }
+
+                val sector16Aids: Map<MadAid, Int> = sector16
+                    .slice(2 .. 47)
+                    .chunked(2)
+                    .mapIndexed { index, uBytes ->
+                        val aid = MadAid.fromRaw(uBytes[0], uBytes[1])
+                        aid to index + 17
+                    }
+                    .toMap()
+
+                // When MADv2, concatenate AIDs from MADv1 sector0 and MADv2 sector16
+                return create(multiApplicationCard, cardPublisherSector, sector0Aids + sector16Aids)
             }
 
-            return create(multiApplicationCard, cardPublisherSector)
+            return create(multiApplicationCard, cardPublisherSector, sector0Aids)
         }
 
         /**
