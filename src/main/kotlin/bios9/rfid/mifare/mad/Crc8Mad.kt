@@ -6,7 +6,7 @@ package bios9.rfid.mifare.mad
  * And https://github.com/RfidResearchGroup/proxmark3/blob/master/common/crc.c
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-class Crc8Mad {
+class Crc8Mad private constructor() {
     companion object {
         private const val POLYNOMIAL = 0x1Du // MIFARE MAD polynomial
         private const val INIT_VALUE = 0xC7u // Initial value from MIFARE MAD spec

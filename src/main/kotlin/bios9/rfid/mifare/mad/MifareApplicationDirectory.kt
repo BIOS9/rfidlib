@@ -12,10 +12,10 @@ import bios9.rfid.mifare.exceptions.*
 class MifareApplicationDirectory private constructor(
     val multiApplicationCard: Boolean,
     val cardPublisherSector: UByte?,
-    val applications: Map<MadAid, Int>
+    val applications: Map<Int, MadAid>
 ) {
     companion object {
-        fun create(multiApplicationCard: Boolean, cardPublisherSector: UByte?, applications: Map<MadAid, Int>): MifareApplicationDirectory {
+        fun create(multiApplicationCard: Boolean, cardPublisherSector: UByte?, applications: Map<Int, MadAid>): MifareApplicationDirectory {
             return MifareApplicationDirectory(multiApplicationCard, cardPublisherSector, applications)
         }
 
@@ -37,7 +37,7 @@ class MifareApplicationDirectory private constructor(
         fun decode(sector0: UByteArray, sector16: UByteArray?): MifareApplicationDirectory {
             require(sector0.size == 64) { "Invalid sector0 length: ${sector0.size}. Length must be 64 bytes." }
             if (sector16 != null) {
-                require(sector16?.size == 64) { "Invalid sector16 length: ${sector16?.size}. Length must be 64 bytes." }
+                require(sector16.size == 64) { "Invalid sector16 length: ${sector16.size}. Length must be 64 bytes." }
             }
 
             val generalPurposeByte: UByte = sector0[(3 * 16) + 9]
@@ -73,12 +73,12 @@ class MifareApplicationDirectory private constructor(
             val sector0InfoByte = decodeInfoByte(sector0[17], 1)
             var cardPublisherSector = if (sector0InfoByte == 0u.toUByte()) null else sector0InfoByte
 
-            val sector0Aids: Map<MadAid, Int> = sector0
+            val sector0Aids: Map<Int, MadAid> = sector0
                 .slice(18 .. 47)
                 .chunked(2)
                 .mapIndexed { index, uBytes ->
-                    val aid = MadAid.fromRaw(uBytes[0], uBytes[1])
-                    aid to index + 1
+                    val aid = MadAid.fromRaw(uBytes[1], uBytes[0])
+                    index + 1 to aid
                 }
                 .toMap()
 
@@ -88,7 +88,7 @@ class MifareApplicationDirectory private constructor(
 
                 // CRC calculation for MADv2 sector 16.
                 val expectedCrc16 = sector16[0] // First byte in sector 16 is the CRC.
-                if (Crc8Mad.compute(sector0.sliceArray(1..47)) != expectedCrc16) {
+                if (Crc8Mad.compute(sector16.sliceArray(1..47)) != expectedCrc16) {
                     throw InvalidMadCrcException(16)
                 }
 
@@ -98,12 +98,12 @@ class MifareApplicationDirectory private constructor(
                     cardPublisherSector = sector16InfoByte
                 }
 
-                val sector16Aids: Map<MadAid, Int> = sector16
+                val sector16Aids: Map<Int, MadAid> = sector16
                     .slice(2 .. 47)
                     .chunked(2)
                     .mapIndexed { index, uBytes ->
-                        val aid = MadAid.fromRaw(uBytes[0], uBytes[1])
-                        aid to index + 17
+                        val aid = MadAid.fromRaw(uBytes[1], uBytes[0])
+                        index + 17 to aid
                     }
                     .toMap()
 
@@ -121,22 +121,23 @@ class MifareApplicationDirectory private constructor(
          * @return 6 bit pointer to the Card Publisher Sector (CPS).
          */
         private fun decodeInfoByte(byte: UByte, madVersion: Int): UByte {
-            require(madVersion in 1..2) { "MAD version must be 1 or 2." }
-
             val infoByte = byte and 0x3Fu // Bits 6 and 7 are reserved, so ignore.
 
-            // Spec says 0x10 and 0x28..0x3F shall not be used.
-            if (infoByte == 0x10u.toUByte() || infoByte in 0x28u.toUByte()..0x3Fu.toUByte()) {
+            // Spec says 0x10 shall not be used.
+            // Card publisher sector cannot be MADv2 sector 16.
+            if (infoByte == 0x10u.toUByte()) {
                 throw InvalidMadInfoByteException(infoByte, madVersion)
             }
 
-            // Spec says MAD can only point to 38 sectors.
-            if (infoByte >= 0x26u) {
+            // Spec says 0x28..0x3F shall not be used.
+            // Spec also says info byte can only point to 38 sectors.
+            // I take this to mean 40 sectors - sector 0 and sector 16 = 38. This means the highest valid value is sector 39 (0x27).
+            if (infoByte >= 0x28u) {
                 throw InvalidMadInfoByteException(infoByte, madVersion)
             }
 
-            // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors.
-            if (infoByte >= 0x0Fu && madVersion == 1) {
+            // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding sector 0 since that means the value is absent).
+            if (infoByte > 15u && madVersion == 1) {
                 throw InvalidMadInfoByteException(infoByte, madVersion)
             }
 
