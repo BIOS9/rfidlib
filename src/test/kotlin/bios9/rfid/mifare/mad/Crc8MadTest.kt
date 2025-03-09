@@ -1,4 +1,4 @@
-package bios9.rfid.mifare
+package bios9.rfid.mifare.mad
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
