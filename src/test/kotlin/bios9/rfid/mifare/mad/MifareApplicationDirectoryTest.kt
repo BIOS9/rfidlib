@@ -1,15 +1,22 @@
 package bios9.rfid.mifare.mad
 
-import bios9.rfid.mifare.mad.exceptions.*
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.fail
+import bios9.rfid.mifare.classic.MifareClassic
+import bios9.rfid.mifare.classic.MifareKeyType
+import bios9.rfid.mifare.classic.exceptions.InvalidSectorSize
+import bios9.rfid.mifare.mad.exceptions.InvalidMadCrcException
+import bios9.rfid.mifare.mad.exceptions.InvalidMadVersionException
+import bios9.rfid.mifare.mad.exceptions.MadNotFoundException
+import bios9.rfid.mifare.mad.exceptions.NotPersonalizedException
+import io.mockk.*
+import io.mockk.junit5.MockKExtension
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
-import kotlin.math.truncate
 import kotlin.test.*
 
+@MockKExtension.CheckUnnecessaryStub
 @OptIn(ExperimentalUnsignedTypes::class)
 class MifareApplicationDirectoryTest {
+    val madKeyA = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
+
     val validSector0 = ubyteArrayOf(
         0x9Du, 0x49u, 0x91u, 0x16u, 0xDEu, 0x28u, 0x02u, 0x00u, 0xE3u, 0x27u, 0x00u, 0x20u, 0x00u, 0x00u, 0x00u, 0x17u,
         0xCDu, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
@@ -31,214 +38,309 @@ class MifareApplicationDirectoryTest {
         0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x78u, 0x77u, 0x88u, 0xC2u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u
     )
 
+    /**
+     * Replaces byte at index in array with specified value.
+     */
+    fun UByteArray.replaceIndex(index: Int, newValue: UByte): UByteArray =
+        this.mapIndexed { i, oldValue ->
+            if (index == i) newValue else oldValue
+        }.toUByteArray()
+
+    /**
+     * Recalculates and replaces CRC value for MAD v1 sector.
+     */
+    fun UByteArray.recalculateMadV1Crc(): UByteArray {
+        require(this.size == 64)
+        return this.replaceIndex(16, Crc8Mad.compute(this.sliceArray(17 .. 47)))
+    }
+
+    /**
+     * Recalculates and replaces CRC value for MAD v2 sector.
+     */
+    fun UByteArray.recalculateMadV2Crc(): UByteArray {
+        require(this.size == 64)
+        return this.replaceIndex(0, Crc8Mad.compute(this.sliceArray(1 .. 47)))
+    }
+
+    /**
+     * Converts MADv1 sector into MADv2 sector by changing version bits.
+     */
+    fun UByteArray.makeMadV2(): UByteArray {
+        require(this.size == 64)
+        require(this[57] == 0xC1u.toUByte())
+        return this.replaceIndex(57, 0xC2u)
+    }
+
+    private fun mockClassic1k(sector0: UByteArray): MifareClassic{
+        val tag = mockk<MifareClassic>()
+        every { tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA) } just runs
+        every { tag.readSector(0) } returns sector0
+
+        return tag
+    }
+
+    private fun mockClassic4k(sector0: UByteArray, sector16: UByteArray): MifareClassic{
+        val tag = mockk<MifareClassic>()
+        every { tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA) } just runs
+        every { tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA) } just runs
+        every { tag.readSector(0) } returns sector0
+        every { tag.readSector(16) } returns sector16
+
+        return tag
+    }
+
     @Test
     fun `valid mad v1 should decode`() {
-        MifareApplicationDirectory.decode(validSector0)
+        val tag = mockClassic1k(validSector0)
+
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
+        assertEquals(1u, mad.madVersion)
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(0)
+        }
+
+        confirmVerified(tag)
+    }
+
+    @Test
+    fun `missing mad v1 sector should fail`() {
+        val tag = mockClassic1k(validSector0)
+        every { tag.readSector(0) } throws Exception()
+
+        assertFailsWith<Exception> {
+            MifareApplicationDirectory.readFromMifareClassic(tag)
+        }
     }
 
     @Test
     fun `invalid mad sector size should fail`() {
-        assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.decode(UByteArray(63))
+        val tag1 = mockClassic1k(validSector0.take(63).toUByteArray())
+        assertFailsWith<InvalidSectorSize> {
+            MifareApplicationDirectory.readFromMifareClassic(tag1)
         }
 
-        assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.decode(UByteArray(65))
+        val tag2 = mockClassic1k((validSector0 + 0u).toUByteArray())
+        assertFailsWith<InvalidSectorSize> {
+            MifareApplicationDirectory.readFromMifareClassic(tag2)
         }
 
-        assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.decode(UByteArray(64), UByteArray(63))
+        val tag3 = mockClassic4k(validSector0.makeMadV2(), validSector16.take(63).toUByteArray())
+        assertFailsWith<InvalidSectorSize> {
+            MifareApplicationDirectory.readFromMifareClassic(tag3)
         }
 
-        assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.decode(UByteArray(64), UByteArray(65))
+        val tag4 = mockClassic4k(validSector0.makeMadV2(), (validSector16 + 0u).toUByteArray())
+        assertFailsWith<InvalidSectorSize> {
+            MifareApplicationDirectory.readFromMifareClassic(tag4)
         }
     }
 
     @Test
     fun `unpersonalized card should fail`() {
-        val sector0 = validSector0.copyOf()
         // When GPB is 0x69 it indicates an unpersonalized card.
-        sector0[57] = 0x69u
+        val tag = mockClassic1k(validSector0.replaceIndex(57, 0x69u))
 
         assertFailsWith<NotPersonalizedException> {
-            MifareApplicationDirectory.decode(sector0)
+            MifareApplicationDirectory.readFromMifareClassic(tag)
         }
     }
 
     @Test
     fun `false mad DA bit should fail`() {
-        val sector0 = validSector0.copyOf()
         // First bit of GPB is the DA bit.
-        sector0[57] = 0b01000001u
+        val tag = mockClassic1k(validSector0.replaceIndex(57, 0b01000001u))
 
         assertFailsWith<MadNotFoundException> {
-            MifareApplicationDirectory.decode(sector0)
+            MifareApplicationDirectory.readFromMifareClassic(tag)
         }
     }
 
     @Test
     fun `multi-application bit should be read`() {
-        val sector0 = validSector0.copyOf()
         // Second bit of GPB is the MA bit.
-        sector0[57] = 0b11000001u
-        assertTrue(MifareApplicationDirectory.decode(sector0).multiApplicationCard, "Expected multi-application card")
-        sector0[57] = 0b10000001u
-        assertFalse(MifareApplicationDirectory.decode(sector0).multiApplicationCard, "Expected single-application card")
+        // Check multi-application.
+        val maTag = mockClassic1k(validSector0.replaceIndex(57, 0b11000001u))
+        assertTrue(MifareApplicationDirectory.readFromMifareClassic(maTag).multiApplicationCard, "Expected multi-application card")
+
+        verifySequence {
+            maTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            maTag.readSector(0)
+        }
+
+        confirmVerified(maTag)
+
+        // Check single-application.
+        val saTag = mockClassic1k(validSector0.replaceIndex(57, 0b10000001u))
+        assertFalse(MifareApplicationDirectory.readFromMifareClassic(saTag).multiApplicationCard, "Expected single-application card")
+
+        verifySequence {
+            saTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            saTag.readSector(0)
+        }
+
+        confirmVerified(saTag)
     }
 
     @Test
     fun `invalid mad version should fail`() {
-        val sector0 = validSector0.copyOf()
         // Final two bits of GPB is the MAD version which must be 1 or 2.
-        sector0[57] = 0b11000000u
+        val tag1 = mockClassic1k(validSector0.replaceIndex(57, 0b11000000u))
         assertFailsWith<InvalidMadVersionException> {
-            MifareApplicationDirectory.decode(sector0)
+            // 0b00 MAD version bits.
+            MifareApplicationDirectory.readFromMifareClassic(tag1)
         }
-        sector0[57] = 0b11000011u
+
+        val tag2 = mockClassic1k(validSector0.replaceIndex(57, 0b11000011u))
         assertFailsWith<InvalidMadVersionException> {
-            MifareApplicationDirectory.decode(sector0)
+            // 0b11 MAD version bits.
+            MifareApplicationDirectory.readFromMifareClassic(tag2)
         }
     }
 
     @Test
     fun `invalid mad v1 crc should fail`() {
-        val sector0 = validSector0.copyOf()
-        // 17th byte in sector 0 is CRC/
-        sector0[16] = 0u
+        // 17th byte in sector 0 is CRC.
+        val tag = mockClassic1k(validSector0.replaceIndex(16, 0u))
         assertFailsWith<InvalidMadCrcException> {
-            MifareApplicationDirectory.decode(sector0)
+            MifareApplicationDirectory.readFromMifareClassic(tag)
         }
     }
 
     @Test
     fun `check card publisher sector`() {
-        val sector0 = validSector0.copyOf()
         // 18th byte in sector 0 is the info byte which contains the CPS pointer.
-        sector0[17] = 0x05u
-        sector0[16] = Crc8Mad.compute(sector0.sliceArray(17..47)) // Need to recalculate CRC when modifying this byte.
-        assertEquals(0x05u.toUByte(), MifareApplicationDirectory.decode(sector0).cardPublisherSector)
+        // CRC must be recalculated when modifying info byte 17.
 
-        sector0[17] = 0u
-        sector0[16] = Crc8Mad.compute(sector0.sliceArray(17..47))
-        assertNull(MifareApplicationDirectory.decode(sector0).cardPublisherSector)
+        val nullCpsTag = mockClassic1k(validSector0.replaceIndex(17, 0u).recalculateMadV1Crc())
+        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag).cardPublisherSector)
 
-        sector0[17] = 0x0Fu
-        sector0[16] = Crc8Mad.compute(sector0.sliceArray(17..47)) // Need to recalculate CRC when modifying this byte.
-        assertEquals(0x0Fu.toUByte(), MifareApplicationDirectory.decode(sector0).cardPublisherSector)
+        verifySequence {
+            nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            nullCpsTag.readSector(0)
+        }
+
+        confirmVerified(nullCpsTag)
+
+        for (cps in 0x01u .. 0x0Fu) {
+            val tag = mockClassic1k(validSector0.replaceIndex(17, cps.toUByte()).recalculateMadV1Crc())
+            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag).cardPublisherSector)
+
+            verifySequence {
+                tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+                tag.readSector(0)
+            }
+
+            confirmVerified(tag)
+        }
     }
 
     @Test
     fun `check invalid mad v1 card publisher sector`() {
-        val sector0 = validSector0.copyOf()
-        // 18th byte in sector 0 is the info byte which contains the CPS pointer.
-        sector0[17] = 0x10u
-        sector0[16] = Crc8Mad.compute(sector0.sliceArray(17..47)) // Need to recalculate CRC when modifying this byte.
-        assertFailsWith<InvalidMadInfoByteException> {
-            MifareApplicationDirectory.decode(sector0)
+        // CPS cannot point to sector 0x10 since that's reserved for MADv2.
+        val tag1 = mockClassic1k(validSector0.replaceIndex(17, 0x10u).recalculateMadV1Crc())
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.readFromMifareClassic(tag1)
         }
 
         // Mad V1 CPS cannot exceed 15.
         for (info in 0x10u .. 0x3Fu) {
-            sector0[17] = info.toUByte()
-            sector0[16] = Crc8Mad.compute(sector0.sliceArray(17..47)) // Need to recalculate CRC when modifying this byte.
-            assertFailsWith<InvalidMadInfoByteException> {
-                MifareApplicationDirectory.decode(sector0)
+            val tag = mockClassic1k(validSector0.replaceIndex(17, info.toUByte()).recalculateMadV1Crc())
+            assertFailsWith<IllegalArgumentException> {
+                MifareApplicationDirectory.readFromMifareClassic(tag)
             }
         }
     }
 
     @Test
     fun `missing mad v2 sector should fail`() {
-        val sector0 = validSector0.copyOf()
-        // Set GPB to indicate MAD v2.
-        sector0[57] = 0b11000010u
-        assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.decode(sector0)
+        val tag = mockClassic4k(validSector0.makeMadV2(), validSector16)
+        every { tag.readSector(16) } throws Exception()
+
+        assertFailsWith<Exception> {
+            MifareApplicationDirectory.readFromMifareClassic(tag)
         }
     }
 
     @Test
     fun `valid mad v2 should decode`() {
-        val sector0 = validSector0.copyOf()
-        val sector16 = validSector16.copyOf()
+        val tag = mockClassic4k(validSector0.makeMadV2(), validSector16)
 
-        // Set GPB in sector 0 to indicate MAD v2.
-        sector0[57] = 0b11000010u
-        MifareApplicationDirectory.decode(sector0, sector16)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
+        assertEquals(2u, mad.madVersion)
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(0)
+            tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(16)
+        }
+
+        confirmVerified(tag)
     }
 
     @Test
     fun `invalid mad v2 crc should fail`() {
-        val sector0 = validSector0.copyOf()
-        val sector16 = validSector16.copyOf()
+        // Replace CRC with 0 for MADv2 sector.
+        val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(0, 0u))
 
-        // Set GPB in sector 0 to indicate MAD v2.
-        sector0[57] = 0b11000010u
-
-        sector16[0] = 0u // Change CRC
         assertFailsWith<InvalidMadCrcException> {
-            MifareApplicationDirectory.decode(sector0, sector16)
+            MifareApplicationDirectory.readFromMifareClassic(tag)
         }
     }
 
     @Test
     fun `check valid mad v2 cps`() {
-        val sector0 = validSector0.copyOf()
-        val sector16 = validSector16.copyOf()
-
-        // Set GPB in sector 0 to indicate MAD v2.
-        sector0[57] = 0b11000010u
-        MifareApplicationDirectory.decode(sector0, sector16)
-
         // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
-        sector16[1] = 0x05u
-        sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47)) // Need to recalculate CRC when modifying this byte.
-        assertEquals(0x05u.toUByte(), MifareApplicationDirectory.decode(sector0, sector16).cardPublisherSector)
 
-        sector16[1] = 0x11u
-        sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47)) // Need to recalculate CRC when modifying this byte.
-        assertEquals(0x11u.toUByte(), MifareApplicationDirectory.decode(sector0, sector16).cardPublisherSector)
+        val nullCpsTag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x0u).recalculateMadV2Crc())
+        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag).cardPublisherSector)
 
-        sector16[1] = 0u
-        sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47))
-        assertNull(MifareApplicationDirectory.decode(sector0, sector16).cardPublisherSector)
+        verifySequence {
+            nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            nullCpsTag.readSector(0)
+            nullCpsTag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
+            nullCpsTag.readSector(16)
+        }
 
-        sector16[1] = 0x27u
-        sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47)) // Need to recalculate CRC when modifying this byte.
-        assertEquals(0x27u.toUByte(), MifareApplicationDirectory.decode(sector0, sector16).cardPublisherSector)
+        confirmVerified(nullCpsTag)
+
+        for (cps in 0x01u .. 0x027u) {
+            // Skip MADv2 sector.
+            if (cps == 0x10u) {
+                continue
+            }
+
+            val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, cps.toUByte()).recalculateMadV2Crc())
+            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag).cardPublisherSector)
+        }
     }
 
     @Test
     fun `invalid mad v2 cps should fail`() {
-        val sector0 = validSector0.copyOf()
-        val sector16 = validSector16.copyOf()
-
-        // Set GPB in sector 0 to indicate MAD v2.
-        sector0[57] = 0b11000010u
-
         // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
+
         // CPS cannot point at MAD v2 sector 16 (0x10).
-        sector16[1] = 0x10u
-        sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47)) // Need to recalculate CRC when modifying this byte.
-        assertFailsWith<InvalidMadInfoByteException> {
-            MifareApplicationDirectory.decode(sector0, sector16)
+        val tag1 = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x10u).recalculateMadV2Crc())
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.readFromMifareClassic(tag1)
         }
 
         // CPS pointer cannot exceed sector 39.
         for (info in 0x28u .. 0x3Fu) {
-            sector16[1] = info.toUByte()
-            sector16[0] = Crc8Mad.compute(sector16.sliceArray(1..47)) // Need to recalculate CRC when modifying this byte.
-            assertFailsWith<InvalidMadInfoByteException> {
-                MifareApplicationDirectory.decode(sector0, sector16)
+            val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, info.toUByte()).recalculateMadV2Crc())
+            assertFailsWith<IllegalArgumentException> {
+                MifareApplicationDirectory.readFromMifareClassic(tag)
             }
         }
     }
 
     @Test
     fun `check valid mad v1 applications`() {
-        val sector0 = validSector0.copyOf()
-        val mad = MifareApplicationDirectory.decode(sector0)
+        val tag = mockClassic1k(validSector0)
+
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
 
         assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
         for (sector in 1..13) {
@@ -248,28 +350,39 @@ class MifareApplicationDirectoryTest {
         // Gallagher AIDs
         assertEquals(MadAid.fromFunction(MadFunctionCluster.ACCESS_CONTROL_SECURITY_48, 0x11u), mad.applications[14])
         assertEquals(MadAid.fromFunction(MadFunctionCluster.ACCESS_CONTROL_SECURITY_48, 0x12u), mad.applications[15])
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(0)
+        }
+
+        confirmVerified(tag)
     }
 
     @Test
     fun `check more valid mad v1 applications`() {
-        val sector0 = validSector0MoreAids.copyOf()
-        val mad = MifareApplicationDirectory.decode(sector0)
+        val tag = mockClassic1k(validSector0MoreAids)
+
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
 
         assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
         for (sector in 1..15) {
             assertEquals(MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
         }
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(0)
+        }
+
+        confirmVerified(tag)
     }
 
     @Test
     fun `check valid mad v2 applications`() {
-        val sector0 = validSector0MoreAids.copyOf()
-        val sector16 = validSector16.copyOf()
+        val tag = mockClassic4k(validSector0MoreAids.makeMadV2(), validSector16)
 
-        // Set GPB in sector 0 to indicate MAD v2.
-        sector0[57] = 0b11000010u
-
-        val mad = MifareApplicationDirectory.decode(sector0, sector16)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
 
         assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs.")
         for (sector in 1..38) {
@@ -278,5 +391,14 @@ class MifareApplicationDirectoryTest {
             }
             assertEquals(MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
         }
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(0)
+            tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
+            tag.readSector(16)
+        }
+
+        confirmVerified(tag)
     }
 }

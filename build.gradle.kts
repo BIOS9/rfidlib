@@ -1,3 +1,5 @@
+import org.gradle.launcher.daemon.configuration.DaemonBuildOptions.JvmArgsOption
+
 plugins {
     kotlin("jvm") version "2.1.10"
 }
@@ -11,6 +13,7 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
+    testImplementation("io.mockk:mockk:1.13.17")
     implementation(files("libs/taplinx/classic-4.0.0-RELEASE.jar"))
     implementation(files("libs/taplinx/desfire-4.0.0-RELEASE.jar"))
     implementation(files("libs/taplinx/plus-4.0.0-RELEASE.jar"))
@@ -19,5 +22,6 @@ dependencies {
 }
 
 tasks.test {
+    jvmArgs("-XX:+EnableDynamicAgentLoading")
     useJUnitPlatform()
 }
