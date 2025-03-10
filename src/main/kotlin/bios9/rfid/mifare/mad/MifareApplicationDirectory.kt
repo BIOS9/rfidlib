@@ -46,7 +46,7 @@ class MifareApplicationDirectory private constructor (
 
             // Fill unspecified applications with FREE AID.
             val allApplications: Map<Int, MadAid> = (1..maxAppSector)
-                .filter { s -> s == 0x10 }
+                .filter { s -> s != 0x10 }
                 .associateWith { s ->
                     applications[s] ?: MadAid.fromAdministrationCode(MadAdministrationCode.FREE)
                 }
