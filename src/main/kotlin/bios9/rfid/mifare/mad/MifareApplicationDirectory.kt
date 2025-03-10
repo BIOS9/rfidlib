@@ -66,13 +66,9 @@ class MifareApplicationDirectory private constructor (
         fun readFromMifareClassic(tag: MifareClassic): MifareApplicationDirectory {
             // Sector 0 must be present and readable MADv1
             tag.authenticateSector(0, MAD_KEY_A, MifareKeyType.KeyA)
-            val sector0 = tag.readSector(0)
+            val block3 = tag.readBlock(3) // Block 3 contains the General Purpose Byte, Keys and access conditions.
 
-            if (sector0.size != 64) {
-                throw InvalidSectorSize(64, sector0.size)
-            }
-
-            val generalPurposeByte: UByte = sector0[(3 * 16) + 9]
+            val generalPurposeByte: UByte = block3[9]
 
             // A GPB value of 0x96 indicates the MIFARE card has not been personalized and thus the MAD is invalid.
             if (generalPurposeByte == 0x69u.toUByte()) {
@@ -96,17 +92,21 @@ class MifareApplicationDirectory private constructor (
 
             // CRC calculation for MADv1 sector 0.
             // Expected CRC is offset by 16 bytes of manufacturer data in sector 0 (UID etc.).
-            val expectedCrc0 = sector0[16]
-            if (Crc8Mad.compute(sector0.sliceArray(17..47)) != expectedCrc0) {
+            val block1 = tag.readBlock(1) // CRC and AIDs are stored in block 1.
+            val block2 = tag.readBlock(2) // Rest of AIDs are stored in block 2.
+            val expectedCrc0 = block1[0]
+            // We have to drop the first byte of the MADv1 data since that is the expected CRC.
+            val madv1Data = (block1 + block2).drop(1)
+            if (Crc8Mad.compute(madv1Data.toUByteArray()) != expectedCrc0) {
                 throw InvalidMadCrcException(0)
             }
 
             // Decode info byte, if it's non-zero, set the Card Publisher Sector (CPS).
-            val sector0InfoByte = sector0[17] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
+            val sector0InfoByte = madv1Data[0] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
             var cardPublisherSector = if (sector0InfoByte == 0u.toUByte()) null else sector0InfoByte
 
-            val sector0Aids: Map<Int, MadAid> = sector0
-                .slice(18 .. 47)
+            val sector0Aids: Map<Int, MadAid> = madv1Data
+                .drop(1) // Skip the info byte.
                 .chunked(2)
                 .mapIndexed { index, uBytes ->
                     val aid = MadAid.fromRaw(uBytes[1], uBytes[0])
@@ -117,25 +117,27 @@ class MifareApplicationDirectory private constructor (
             if (madVersion == 2u.toUByte()) {
                 // Sector 16 must be present and readable MADv2
                 tag.authenticateSector(16, MAD_KEY_A, MifareKeyType.KeyA)
-                val sector16 = tag.readSector(16)
-                if (sector16.size != 64) {
-                    throw InvalidSectorSize(64, sector16.size)
-                }
+                val sec16block0 = tag.readBlock(MifareClassic.sectorToBlock(16))
+                val madV2Data = (
+                        sec16block0.drop(1) + // Drop the CRC
+                        tag.readBlock(MifareClassic.sectorToBlock(16) + 1) +
+                        tag.readBlock(MifareClassic.sectorToBlock(16) + 2)
+                    ).toUByteArray()
 
                 // CRC calculation for MADv2 sector 16.
-                val expectedCrc16 = sector16[0] // First byte in sector 16 is the CRC.
-                if (Crc8Mad.compute(sector16.sliceArray(1..47)) != expectedCrc16) {
+                val expectedCrc16 = sec16block0[0] // First byte in sector 16 is the CRC.
+                if (Crc8Mad.compute(madV2Data) != expectedCrc16) {
                     throw InvalidMadCrcException(16)
                 }
 
                 // Use the MADv2 CPS if it's present and non-zero.
-                val sector16InfoByte = sector16[1] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
+                val sector16InfoByte = madV2Data[0] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
                 if (sector16InfoByte != 0u.toUByte()) {
                     cardPublisherSector = sector16InfoByte
                 }
 
-                val sector16Aids: Map<Int, MadAid> = sector16
-                    .slice(2 .. 47)
+                val sector16Aids: Map<Int, MadAid> = madV2Data
+                    .drop(1) // Skip info byte.
                     .chunked(2)
                     .mapIndexed { index, uBytes ->
                         val aid = MadAid.fromRaw(uBytes[1], uBytes[0])

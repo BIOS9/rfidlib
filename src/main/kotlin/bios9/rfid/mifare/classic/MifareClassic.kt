@@ -12,4 +12,10 @@ interface MifareClassic {
             .flatMap { block -> readBlock((sector * 4) + block).asIterable() }
             .toUByteArray()
     }
+
+    companion object {
+        fun sectorToBlock(sector: Int): Int {
+            return sector * 4
+        }
+    }
 }
