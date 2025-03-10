@@ -7,12 +7,6 @@ interface MifareClassic {
     fun readBlock(block: Int): UByteArray
     fun writeBlock(block: Int, data: UByteArray)
 
-    fun readSector(sector: Int): UByteArray {
-        return (0..3)
-            .flatMap { block -> readBlock((sector * 4) + block).asIterable() }
-            .toUByteArray()
-    }
-
     companion object {
         fun sectorToBlock(sector: Int): Int {
             return sector * 4
