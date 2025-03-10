@@ -9,8 +9,8 @@ import bios9.rfid.mifare.mad.exceptions.MadNotFoundException
 import bios9.rfid.mifare.mad.exceptions.NotPersonalizedException
 import io.mockk.*
 import io.mockk.junit5.MockKExtension
-import org.junit.jupiter.api.Test
 import kotlin.test.*
+import kotlin.test.Test
 
 @MockKExtension.CheckUnnecessaryStub
 @OptIn(ExperimentalUnsignedTypes::class)
@@ -400,5 +400,159 @@ class MifareApplicationDirectoryTest {
         }
 
         confirmVerified(tag)
+    }
+
+    @Test
+    fun `check create mad`() {
+        MifareApplicationDirectory.create(true, 1u, null, mapOf())
+        MifareApplicationDirectory.create(false, 1u, null, mapOf())
+        MifareApplicationDirectory.create(true, 2u, null, mapOf())
+        MifareApplicationDirectory.create(false, 2u, null, mapOf())
+
+        for (cps in 1u..15u) {
+            MifareApplicationDirectory.create(true, 1u, cps.toUByte(), mapOf())
+            MifareApplicationDirectory.create(false, 1u, cps.toUByte(), mapOf())
+        }
+
+        for (cps in 1u..39u) {
+            if (cps == 16u) {
+                continue // Skip MADv2 sector
+            }
+            MifareApplicationDirectory.create(true, 2u, cps.toUByte(), mapOf())
+            MifareApplicationDirectory.create(false, 2u, cps.toUByte(), mapOf())
+        }
+    }
+
+    @Test
+    fun `check create mad v1 with apps`() {
+        for (sector in 1..15) {
+            val mad = MifareApplicationDirectory.create(true, 1u, null, mapOf(
+                sector to MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()) // Fill with some AIDs
+            ))
+            assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
+        }
+
+        val madFull = MifareApplicationDirectory.create(true, 1u, null,
+            (1..15).associateWith { s ->
+                MadAid.fromRaw(s.toUByte().inv(), s.toUByte())
+            }
+        )
+
+        assertEquals(15, madFull.applications.size, "Expected 15 MADv1 sector AIDs.")
+        for (sector in 1..15) {
+            assertEquals(sector.toUByte(), madFull.applications[sector]!!.applicationCode)
+        }
+    }
+
+    @Test
+    fun `check create mad v2 with apps`() {
+        for (sector in 1..39) {
+            if (sector == 16) {
+                continue // Skip MADv2 sector
+            }
+            val mad = MifareApplicationDirectory.create(true, 2u, null, mapOf(
+                sector to MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()) // Fill with some AIDs.
+            ))
+            assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs.")
+        }
+
+        val madFull = MifareApplicationDirectory.create(true, 2u, null,
+            (1..39)
+                .filter { s -> s != 16 } // Skip MADv2 sector.
+                .associateWith { s ->
+                MadAid.fromRaw(s.toUByte().inv(), s.toUByte())
+            }
+        )
+        assertEquals(38, madFull.applications.size, "Expected 38 MADv2 sector AIDs.")
+        for (sector in 1..39) {
+            if (sector == 16) {
+                continue // Skip MADv2 sector 16.
+            }
+            assertEquals(sector.toUByte(), madFull.applications[sector]!!.applicationCode)
+        }
+    }
+
+    @Test
+    fun `check create invalid mad version`() {
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 0u, null, mapOf())
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 3u, null, mapOf())
+        }
+    }
+
+    @Test
+    fun `check create invalid mad cps`() {
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 1u, 0u, mapOf())
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 2u, 0u, mapOf())
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 1u, 16u, mapOf())
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 2u, 40u, mapOf())
+        }
+    }
+
+    @Test
+    fun `check create mad v1 with invalid apps`() {
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 1u, null, mapOf(
+                0 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)
+            ))
+        }
+
+        for (sector in 16..100) {
+            assertFailsWith<IllegalArgumentException> {
+                MifareApplicationDirectory.create(true, 1u, null, mapOf(
+                    sector to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)
+                ))
+            }
+        }
+    }
+
+    @Test
+    fun `check create mad v2 with invalid apps`() {
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 2u, null, mapOf(
+                0 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)
+            ))
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            MifareApplicationDirectory.create(true, 2u, null, mapOf(
+                16 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)
+            ))
+        }
+
+        for (sector in 40..100) {
+            assertFailsWith<IllegalArgumentException> {
+                MifareApplicationDirectory.create(true, 1u, null, mapOf(
+                    sector to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)
+                ))
+            }
+        }
+    }
+
+    @Test
+    fun `check mad v1 apps are filled`() {
+        val mad = MifareApplicationDirectory.create(true, 1u, null, mapOf())
+        assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs")
+        assertTrue(mad.applications.all { (_, aid) -> aid == MadAid.fromAdministrationCode(MadAdministrationCode.FREE) }, "Expected all empty apps to be filled with FREE")
+    }
+
+    @Test
+    fun `check mad v2 apps are filled`() {
+        val mad = MifareApplicationDirectory.create(true, 2u, null, mapOf())
+        assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs")
+        assertTrue(mad.applications.all { (_, aid) -> aid == MadAid.fromAdministrationCode(MadAdministrationCode.FREE) }, "Expected all empty apps to be filled with FREE")
     }
 }
