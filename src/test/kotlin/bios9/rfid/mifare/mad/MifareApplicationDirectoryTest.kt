@@ -2,7 +2,6 @@ package bios9.rfid.mifare.mad
 
 import bios9.rfid.mifare.classic.MifareClassic
 import bios9.rfid.mifare.classic.MifareKeyType
-import bios9.rfid.mifare.classic.exceptions.InvalidSectorSize
 import bios9.rfid.mifare.mad.exceptions.InvalidMadCrcException
 import bios9.rfid.mifare.mad.exceptions.InvalidMadVersionException
 import bios9.rfid.mifare.mad.exceptions.MadNotFoundException

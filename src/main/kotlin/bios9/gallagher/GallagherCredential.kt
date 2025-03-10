@@ -59,10 +59,10 @@ class GallagherCredential private constructor(
         )
 
         fun create(regionCode: UByte, facilityCode: UShort, cardNumber: UInt, issueLevel: UByte): GallagherCredential {
-            require(regionCode in 0u..0x0Fu) { "Invalid region code: $regionCode" }
-            require(facilityCode in 0u..0xFFFFu) { "Invalid facility code: $facilityCode" } // This check is impossible to fail with a UShort but keep in case datatype gets changed.
-            require(cardNumber in 0u..0xFFFFFFu) { "Invalid card number: $cardNumber" }
-            require(issueLevel in 0u..0x0Fu) { "Invalid issue level: $issueLevel" }
+            // Can rely on unsigned type to prevent negative values, and all values of unsigned facility code are valid for 16 bit short.
+            require(regionCode <= 0x0Fu) { "Invalid region code: $regionCode" }
+            require(cardNumber <= 0xFFFFFFu) { "Invalid card number: $cardNumber" }
+            require(issueLevel <= 0x0Fu) { "Invalid issue level: $issueLevel" }
 
             return GallagherCredential(regionCode, facilityCode, cardNumber, issueLevel)
         }

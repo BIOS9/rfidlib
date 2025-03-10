@@ -139,4 +139,17 @@ class GallagherCredentialTest {
                         assertEquals(credential.issueLevel, decoded.issueLevel)
                     }
     }
+
+    @Test
+    fun `invalid data length should fail`() {
+        assertThrows<IllegalArgumentException> {
+            GallagherCredential.decode(UByteArray(0))
+        }
+        assertThrows<IllegalArgumentException> {
+            GallagherCredential.decode(UByteArray(7))
+        }
+        assertThrows<IllegalArgumentException> {
+            GallagherCredential.decode(UByteArray(9))
+        }
+    }
 }
