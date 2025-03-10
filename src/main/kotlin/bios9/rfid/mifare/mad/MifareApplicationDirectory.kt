@@ -1,5 +1,8 @@
 package bios9.rfid.mifare.mad
 
+import bios9.rfid.mifare.classic.MifareClassic
+import bios9.rfid.mifare.classic.MifareKeyType
+import bios9.rfid.mifare.classic.exceptions.InvalidSectorSize
 import bios9.rfid.mifare.mad.exceptions.*
 
 /**
@@ -9,35 +12,64 @@ import bios9.rfid.mifare.mad.exceptions.*
  * And https://www.nxp.com/docs/en/application-note/AN10787.pdf
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-class MifareApplicationDirectory private constructor(
+class MifareApplicationDirectory private constructor (
     val multiApplicationCard: Boolean,
+    val madVersion: UByte,
     val cardPublisherSector: UByte?,
     val applications: Map<Int, MadAid>
 ) {
     companion object {
-        fun create(multiApplicationCard: Boolean, cardPublisherSector: UByte?, applications: Map<Int, MadAid>): MifareApplicationDirectory {
-            return MifareApplicationDirectory(multiApplicationCard, cardPublisherSector, applications)
+        private val MAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
+
+        fun create(multiApplicationCard: Boolean, madVersion: UByte, cardPublisherSector: UByte?, applications: Map<Int, MadAid>): MifareApplicationDirectory {
+            require(madVersion in 1u .. 2u) { "MAD version must be 1 or 2" }
+
+            if (cardPublisherSector != null) {
+                require(cardPublisherSector != 0u.toUByte()) { "Card Publisher Sector cannot be 0 (Reserved for MADv1)" }
+
+                // Spec specifies that the CPS cannot be sector 16.
+                require(cardPublisherSector != 0x10u.toUByte()) { "Card Publisher Sector cannot be 0x10 (reserved for MADv2)" }
+
+                // Spec says 0x28..0x3F shall not be used.
+                // Spec also says info byte can only point to 38 sectors.
+                // I take this to mean 40 sectors - sector 0 and sector 16 = 38. This means the highest valid value is sector 39 (0x27).
+                require(cardPublisherSector <= 0x27u) { "Card Publisher Sector must be <= 0x27" }
+
+                // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding sector 0 since that means the value is absent).
+                if (madVersion == 1u.toUByte()) {
+                    require(cardPublisherSector < 0x10u) { "Card Publisher Sector must less than 0x10 for MADv1" }
+                }
+            }
+
+            // Max sector 15 for MADv1, sector 39 for MADv2.
+            val maxAppSector = if (madVersion == 1u.toUByte()) 0x0F else 0x27
+
+            // Fill unspecified applications with FREE AID.
+            val allApplications: Map<Int, MadAid> = (1..maxAppSector)
+                .filter { s -> s == 0x10 }
+                .associateWith { s ->
+                    applications[s] ?: MadAid.fromAdministrationCode(MadAdministrationCode.FREE)
+                }
+
+            require(!applications.containsKey(0)) { "An application must not be associated with sector 0 (Reserved for MADv1)" }
+            require(!applications.containsKey(0x10)) { "An application must not be associated with sector 0x10 (Reserved for MADv2)" }
+            require(applications.none { (sector, _) -> sector > maxAppSector }) { "Applications cannot be associated with sectors higher than $maxAppSector for MADv$madVersion" }
+
+            return MifareApplicationDirectory(multiApplicationCard, madVersion, cardPublisherSector, allApplications)
         }
 
         /**
-         * Decode and validate Mifare Application Directory (MAD) version 1 sectors 0 and 16 from a Mifare tag.
+         * Read, decode and validate a Mifare Application Directory (MAD) from a Mifare Classic tag.
          *
-         * @param sector0 64 byte sector 0 from a Mifare tag which includes MADv1 data.
+         * @param tag A Mifare Classic tag that supports reading sectors and uses well-known MAD keys.
          */
-        fun decode(sector0: UByteArray) : MifareApplicationDirectory {
-            return decode(sector0, null)
-        }
+        fun readFromMifareClassic(tag: MifareClassic): MifareApplicationDirectory {
+            // Sector 0 must be present and readable MADv1
+            tag.authenticateSector(0, MAD_KEY_A, MifareKeyType.KeyA)
+            val sector0 = tag.readSector(0)
 
-        /**
-         * Decode and validate Mifare Application Directory (MAD) version 2 sectors 0 and 16 from a Mifare tag.
-         *
-         * @param sector0 64 byte sector 0 from a Mifare tag which includes MADv1 data.
-         * @param sector16 Optional 64 byte sector 16 from a Mifare tag which includes additional MADv2 data.
-         */
-        fun decode(sector0: UByteArray, sector16: UByteArray?): MifareApplicationDirectory {
-            require(sector0.size == 64) { "Invalid sector0 length: ${sector0.size}. Length must be 64 bytes." }
-            if (sector16 != null) {
-                require(sector16.size == 64) { "Invalid sector16 length: ${sector16.size}. Length must be 64 bytes." }
+            if (sector0.size != 64) {
+                throw InvalidSectorSize(64, sector0.size)
             }
 
             val generalPurposeByte: UByte = sector0[(3 * 16) + 9]
@@ -70,7 +102,7 @@ class MifareApplicationDirectory private constructor(
             }
 
             // Decode info byte, if it's non-zero, set the Card Publisher Sector (CPS).
-            val sector0InfoByte = decodeInfoByte(sector0[17], 1)
+            val sector0InfoByte = sector0[17] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
             var cardPublisherSector = if (sector0InfoByte == 0u.toUByte()) null else sector0InfoByte
 
             val sector0Aids: Map<Int, MadAid> = sector0
@@ -82,9 +114,13 @@ class MifareApplicationDirectory private constructor(
                 }
                 .toMap()
 
-            // Sector 16 needs to be provided for MADv2
             if (madVersion == 2u.toUByte()) {
-                requireNotNull(sector16) { "MAD version was 2 but sector 16 is null." }
+                // Sector 16 must be present and readable MADv2
+                tag.authenticateSector(16, MAD_KEY_A, MifareKeyType.KeyA)
+                val sector16 = tag.readSector(16)
+                if (sector16.size != 64) {
+                    throw InvalidSectorSize(64, sector16.size)
+                }
 
                 // CRC calculation for MADv2 sector 16.
                 val expectedCrc16 = sector16[0] // First byte in sector 16 is the CRC.
@@ -93,7 +129,7 @@ class MifareApplicationDirectory private constructor(
                 }
 
                 // Use the MADv2 CPS if it's present and non-zero.
-                val sector16InfoByte = decodeInfoByte(sector16[1], 2)
+                val sector16InfoByte = sector16[1] and 0b00111111u // Bits 6 and 7 of info byte are reserved, so ignore.
                 if (sector16InfoByte != 0u.toUByte()) {
                     cardPublisherSector = sector16InfoByte
                 }
@@ -108,40 +144,10 @@ class MifareApplicationDirectory private constructor(
                     .toMap()
 
                 // When MADv2, concatenate AIDs from MADv1 sector0 and MADv2 sector16
-                return create(multiApplicationCard, cardPublisherSector, sector0Aids + sector16Aids)
+                return create(multiApplicationCard, madVersion, cardPublisherSector, sector0Aids + sector16Aids)
             }
 
-            return create(multiApplicationCard, cardPublisherSector, sector0Aids)
-        }
-
-        /**
-         * Decodes and validates MAD info byte.
-         *
-         * @param byte Info byte from MAD sector.
-         * @return 6 bit pointer to the Card Publisher Sector (CPS).
-         */
-        private fun decodeInfoByte(byte: UByte, madVersion: Int): UByte {
-            val infoByte = byte and 0x3Fu // Bits 6 and 7 are reserved, so ignore.
-
-            // Spec says 0x10 shall not be used.
-            // Card publisher sector cannot be MADv2 sector 16.
-            if (infoByte == 0x10u.toUByte()) {
-                throw InvalidMadInfoByteException(infoByte, madVersion)
-            }
-
-            // Spec says 0x28..0x3F shall not be used.
-            // Spec also says info byte can only point to 38 sectors.
-            // I take this to mean 40 sectors - sector 0 and sector 16 = 38. This means the highest valid value is sector 39 (0x27).
-            if (infoByte >= 0x28u) {
-                throw InvalidMadInfoByteException(infoByte, madVersion)
-            }
-
-            // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding sector 0 since that means the value is absent).
-            if (infoByte > 15u && madVersion == 1) {
-                throw InvalidMadInfoByteException(infoByte, madVersion)
-            }
-
-            return infoByte
+            return create(multiApplicationCard, madVersion, cardPublisherSector, sector0Aids)
         }
     }
 }
