@@ -14,7 +14,6 @@ repositories {
 dependencies {
     testImplementation(kotlin("test"))
     testImplementation("io.mockk:mockk:1.13.17")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
 }
 
 tasks.test {
