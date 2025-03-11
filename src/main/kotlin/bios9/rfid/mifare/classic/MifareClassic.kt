@@ -11,5 +11,9 @@ interface MifareClassic {
         fun sectorToBlock(sector: Int): Int {
             return sector * 4
         }
+
+        fun blockToSector(block: Int): Int {
+            return block / 4
+        }
     }
 }
