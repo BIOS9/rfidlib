@@ -1,4 +1,4 @@
-package bios9.gallagher
+package bios9.rfid.gallagher
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

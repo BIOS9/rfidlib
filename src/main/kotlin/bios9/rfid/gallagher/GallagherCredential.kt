@@ -1,4 +1,4 @@
-package bios9.gallagher
+package bios9.rfid.gallagher
 
 /**
  * A Gallagher cardholder credential.
