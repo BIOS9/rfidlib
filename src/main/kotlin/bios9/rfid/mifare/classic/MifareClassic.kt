@@ -12,6 +12,10 @@ interface MifareClassic {
             return sector * 4
         }
 
+        fun sectorToBlock(sector: Int, blockOffset: Int): Int {
+            return (sector * 4) + blockOffset
+        }
+
         fun blockToSector(block: Int): Int {
             return block / 4
         }
