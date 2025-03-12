@@ -7,7 +7,9 @@ import bios9.util.BitReader
 import java.util.BitSet
 
 @OptIn(ExperimentalUnsignedTypes::class)
-class CardAppliationDirectory private constructor() {
+class CardAppliationDirectory private constructor(
+    credentials: Map<Pair<UByte, UShort>, Int>
+) {
     companion object {
         private val CAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u) // Same as MAD key.
 
@@ -39,12 +41,12 @@ class CardAppliationDirectory private constructor() {
                     val regionCode = (it and 0xF000000u) shr 24
                     val facilityCode = (it and 0xFFFF00u) shr 8
                     val credSector = it and 0xFFu
-                    Pair(regionCode.toUByte(), facilityCode.toUShort()) to credSector.toUByte()
+                    Pair(regionCode.toUByte(), facilityCode.toUShort()) to credSector.toInt()
                 }
-                .takeWhile { (_, value) -> value != 0u.toUByte() } // Stop when sector 0 is reached. Sector 0 cannot be used.
+                .takeWhile { (_, value) -> value != 0 } // Stop when sector 0 is reached. Sector 0 cannot be used.
                 .toMap()
 
-            return CardAppliationDirectory()
+            return CardAppliationDirectory(mappings)
         }
     }
 }
