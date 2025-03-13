@@ -1,12 +1,16 @@
  package bios9.rfid.gallagher
 
- import bios9.rfid.gallagher.CardAppliationDirectory
  import bios9.rfid.gallagher.exceptions.CredentialNotFoundException
+ import bios9.rfid.gallagher.exceptions.InvalidGallagherCredential
  import bios9.rfid.mifare.classic.MifareClassic
+ import bios9.rfid.mifare.classic.MifareKeyType
  import bios9.rfid.mifare.mad.MifareApplicationDirectory
  import co.touchlab.kermit.Logger
 
-class GallagherMifareClassic private constructor () {
+ @OptIn(ExperimentalUnsignedTypes::class)
+class GallagherMifareClassic private constructor (
+    val credentials: List<GallagherCredential>
+) {
     companion object {
         const val GALLAGHER_CAD_AID = 0x4811u // MAD Application ID of Gallagher Card Application Directory.
         const val GALLAGHER_CREDENTIAL_AID = 0x4812u // MAD Application ID of Gallagher Credential.
@@ -36,24 +40,23 @@ class GallagherMifareClassic private constructor () {
 //                .useSectorWriteKey(14, 0x123456, KeyB) // Seems a bit better than ^
 //        }
 
-        fun readFromTag(mifareClassic: MifareClassic): GallagherMifareClassic {
+        fun readFromTag(tag: MifareClassic, keys: Map<UByteArray, MifareKeyType>): GallagherMifareClassic {
             Logger.d { "Reading Gallagher credential from Mifare Classic" }
 
-            val mad = MifareApplicationDirectory.readFromMifareClassic(mifareClassic)
+            val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
             Logger.d { "Valid Mifare Application Directory (MAD) found on tag $mad" }
 
-
-
             val cadSector = mad.applications.entries.firstOrNull { (_, aid) -> aid.rawValue == GALLAGHER_CAD_AID.toUShort() }?.key
-            if (cadSector != null) {
+            val credentialSectors = if (cadSector != null) {
                 // There is a CAD so we can use it to figure out where the credentials are.
-                val cad = CardAppliationDirectory.readFromMifareClassic(mifareClassic, cadSector)
+                val cad = CardAppliationDirectory.readFromMifareClassic(tag, cadSector)
                 Logger.d { "Valid Card Application Directory (CAD) found in sector $cadSector - $cad" }
 
                 if (cad.credentials.isEmpty()) {
                     throw CredentialNotFoundException()
                 }
 
+                cad.credentials.values
             } else {
                 // There is no CAD, so we must try to find the credentials in the MAD.
                 Logger.d { "Card Application Directory (CAD) not found. Searching for credentials in MAD..." }
@@ -66,11 +69,53 @@ class GallagherMifareClassic private constructor () {
                 if (credentialSectors.isEmpty()) {
                     throw CredentialNotFoundException()
                 }
+
+                credentialSectors
             }
 
-            return GallagherMifareClassic()
+            val credentials = credentialSectors.mapNotNull { sector ->
+                Logger.d { "Attempting to read credential sector $sector" }
+
+                keys.entries.firstNotNullOfOrNull { (key, keyType) ->
+                    try {
+                        val c = readCredentialSector(tag, sector, key, keyType)
+                        Logger.i { "Successfully read credential from sector $sector" }
+                        c
+                    } catch (e: Exception) {
+                        Logger.w(e) { "Failed to read credential sector $sector, $e" }
+                        null
+                    }
+                }
+            }
+
+            return GallagherMifareClassic(credentials)
+        }
+
+        private fun readCredentialSector(tag: MifareClassic, sector: Int, key: UByteArray, keyType: MifareKeyType): GallagherCredential {
+            tag.authenticateSector(sector, key, keyType)
+            val credentialBlock = tag.readBlock(MifareClassic.sectorToBlock(sector, 0))
+            // The last 8 bytes of the credential block are the bitwise inverse of the first 8.
+            if (!(0..7).all { credentialBlock[it] == credentialBlock[it + 8].inv() }) {
+                throw InvalidGallagherCredential(sector)
+            }
+
+            val cardaxStr = tag.readBlock(MifareClassic.sectorToBlock(sector, 1))
+            // Block 1 should contain "www.cardax.com  "
+            if (String(cardaxStr.toByteArray()) != "www.cardax.com  ") {
+                throw InvalidGallagherCredential(sector)
+            }
+
+            // TODO: implement MES
+            val mes = tag.readBlock(MifareClassic.sectorToBlock(sector, 3)) // Gallagher Mifare Enhanced Security (MES)
+
+            Logger.d("Successfully read Gallagher credential from sector $sector")
+            return GallagherCredential.decode(credentialBlock.sliceArray(0..7))
         }
     }
+
+     override fun toString(): String {
+         return "GallagherMifareClassic(credentials=$credentials)"
+     }
 //    // Need to think about how I want to do this...
 //    // Do I want to put methods inside GallagherCredentials like readFromMifareClassic
 // writeToMifareClassic readFromMifareDesfire .....
@@ -100,4 +145,6 @@ class GallagherMifareClassic private constructor () {
 //
 //        // Check keys and access permissions of all relevant sectors before trying to write pls.
 //    }
+
+
  }
