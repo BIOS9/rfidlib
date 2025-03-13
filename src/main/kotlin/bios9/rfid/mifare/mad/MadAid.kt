@@ -52,4 +52,12 @@ class MadAid private constructor(
     override fun hashCode(): Int {
         return rawValue.hashCode()
     }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    override fun toString(): String {
+        if (administrationCode != null) {
+            return "$administrationCode (0x${rawValue.toHexString(HexFormat.UpperCase)})"
+        }
+        return "$functionCluster - $applicationCode (0x${rawValue.toHexString(HexFormat.UpperCase)})"
+    }
 }

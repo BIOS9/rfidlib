@@ -8,7 +8,7 @@ import java.util.BitSet
 
 @OptIn(ExperimentalUnsignedTypes::class)
 class CardAppliationDirectory private constructor(
-    credentials: Map<Pair<UByte, UShort>, Int>
+    val credentials: Map<Pair<UByte, UShort>, Int>
 ) {
     companion object {
         private val CAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u) // Same as MAD key.
@@ -48,5 +48,17 @@ class CardAppliationDirectory private constructor(
 
             return CardAppliationDirectory(mappings)
         }
+    }
+
+    override fun toString(): String {
+        val credStr = credentials
+            .map { "\t\t(FC: ${it.key.first}, RC: ${it.key.second}) -> ${it.value}" }
+            .joinToString("\n")
+
+        return "CardAppliationDirectory(\n" +
+                "\tcredentials=(\n" +
+                "$credStr\n" +
+                "\t)\n" +
+                ")"
     }
 }

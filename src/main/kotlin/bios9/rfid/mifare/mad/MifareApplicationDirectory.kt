@@ -151,5 +151,21 @@ class MifareApplicationDirectory private constructor (
             return create(multiApplicationCard, madVersion, cardPublisherSector, sector0Aids)
         }
     }
+
+    override fun toString(): String {
+        val appStr = applications
+            .filterValues { it.rawValue != 0u.toUShort() }
+            .map { "\t\t${it.key}: ${it.value}" }
+            .joinToString("\n")
+
+        return "MifareApplicationDirectory(\n" +
+                "\tmultiApplicationCard=$multiApplicationCard,\n" +
+                "\tmadVersion=$madVersion,\n" +
+                "\tcardPublisherSector=$cardPublisherSector,\n" +
+                "\tapplications=(\n" +
+                "$appStr\n" +
+                "\t)\n" +
+                ")"
+    }
 }
 
