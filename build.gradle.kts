@@ -1,5 +1,3 @@
-import org.gradle.launcher.daemon.configuration.DaemonBuildOptions.JvmArgsOption
-
 plugins {
     kotlin("jvm") version "2.1.10"
 }
@@ -14,6 +12,7 @@ repositories {
 dependencies {
     testImplementation(kotlin("test"))
     testImplementation("io.mockk:mockk:1.13.17")
+    implementation("co.touchlab:kermit:2.0.5")
 }
 
 tasks.test {
