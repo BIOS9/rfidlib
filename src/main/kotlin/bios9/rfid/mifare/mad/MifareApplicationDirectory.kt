@@ -1,6 +1,7 @@
 package bios9.rfid.mifare.mad
 
 import bios9.rfid.mifare.classic.MifareClassic
+import bios9.rfid.mifare.classic.MifareClassicKeyProvider
 import bios9.rfid.mifare.classic.MifareKeyType
 import bios9.rfid.mifare.mad.exceptions.*
 
@@ -59,12 +60,30 @@ class MifareApplicationDirectory private constructor (
 
         /**
          * Read, decode and validate a Mifare Application Directory (MAD) from a Mifare Classic tag.
+         * Uses the default MAD key A for authentication.
          *
          * @param tag A Mifare Classic tag that supports reading sectors and uses well-known MAD keys.
          */
         fun readFromMifareClassic(tag: MifareClassic): MifareApplicationDirectory {
+            // Implement MifareClassicKeyProvider that simply authenticates using the default MAD key A.
+            return readFromMifareClassic(tag) { t, sector ->
+                t.authenticateSector(
+                    sector,
+                    MAD_KEY_A,
+                    MifareKeyType.KeyA
+                )
+            }
+        }
+
+        /**
+         * Read, decode and validate a Mifare Application Directory (MAD) from a Mifare Classic tag.
+         *
+         * @param tag A Mifare Classic tag that supports reading sectors and uses well-known MAD keys.
+         * @param keyProvider A key provider used to authenticate with the MIFARE classic tag.
+         */
+        fun readFromMifareClassic(tag: MifareClassic, keyProvider: MifareClassicKeyProvider): MifareApplicationDirectory {
             // Sector 0 must be present and readable MADv1
-            tag.authenticateSector(0, MAD_KEY_A, MifareKeyType.KeyA)
+            keyProvider.authenticate(tag, 0)
             val block3 = tag.readBlock(3) // Block 3 contains the General Purpose Byte, Keys and access conditions.
 
             val generalPurposeByte: UByte = block3[9]
@@ -115,7 +134,7 @@ class MifareApplicationDirectory private constructor (
 
             if (madVersion == 2u.toUByte()) {
                 // Sector 16 must be present and readable MADv2
-                tag.authenticateSector(16, MAD_KEY_A, MifareKeyType.KeyA)
+                keyProvider.authenticate(tag, 16)
                 val sec16block0 = tag.readBlock(MifareClassic.sectorToBlock(16))
                 val madV2Data = (
                         sec16block0.drop(1) + // Drop the CRC
