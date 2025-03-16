@@ -9,15 +9,27 @@ interface MifareClassic {
 
     companion object {
         fun sectorToBlock(sector: Int): Int {
-            return sector * 4
+            return sectorToBlock(sector, 0)
         }
 
         fun sectorToBlock(sector: Int, blockOffset: Int): Int {
-            return (sector * 4) + blockOffset
+            require(sector in 0..39) { "Sector must be in 0..39"}
+            if (sector < 32) {
+                require(blockOffset in 0..3) { "Block offset must be in 0..3 for 4 block sectors."}
+                return (sector * 4) + blockOffset
+            } else {
+                require(blockOffset in 0..15) { "Block offset must be in 0..15 for 16 block sectors."}
+                return ((sector - 32) * 16) + 128 + blockOffset // Mifare 4k has 16 block sectors for sector 32 and above.
+            }
         }
 
         fun blockToSector(block: Int): Int {
-            return block / 4
+            require(block in 0..255) { "Block must be in 0..255"}
+            if (block < 128) {
+                return block / 4
+            } else {
+                return ((block - 128) / 16) + 32
+            }
         }
     }
 }
