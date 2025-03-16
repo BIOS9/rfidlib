@@ -3,6 +3,7 @@
  import bios9.rfid.gallagher.exceptions.CredentialNotFoundException
  import bios9.rfid.gallagher.exceptions.InvalidGallagherCredential
  import bios9.rfid.mifare.classic.MifareClassic
+ import bios9.rfid.mifare.classic.MifareClassicKeyProvider
  import bios9.rfid.mifare.classic.MifareKeyType
  import bios9.rfid.mifare.mad.MifareApplicationDirectory
  import co.touchlab.kermit.Logger
@@ -40,10 +41,10 @@ class GallagherMifareClassic private constructor (
 //                .useSectorWriteKey(14, 0x123456, KeyB) // Seems a bit better than ^
 //        }
 
-        fun readFromTag(tag: MifareClassic, keys: Map<UByteArray, MifareKeyType>): GallagherMifareClassic {
+        fun readFromTag(tag: MifareClassic, keyProvider: MifareClassicKeyProvider): GallagherMifareClassic {
             Logger.d { "Reading Gallagher credential from Mifare Classic" }
 
-            val mad = MifareApplicationDirectory.readFromMifareClassic(tag)
+            val mad = MifareApplicationDirectory.readFromMifareClassic(tag, keyProvider)
             Logger.d { "Valid Mifare Application Directory (MAD) found on tag $mad" }
 
             val cadSector = mad.applications.entries.firstOrNull { (_, aid) -> aid.rawValue == GALLAGHER_CAD_AID.toUShort() }?.key
@@ -76,23 +77,21 @@ class GallagherMifareClassic private constructor (
             val credentials = credentialSectors.mapNotNull { sector ->
                 Logger.d { "Attempting to read credential sector $sector" }
 
-                keys.entries.firstNotNullOfOrNull { (key, keyType) ->
-                    try {
-                        val c = readCredentialSector(tag, sector, key, keyType)
-                        Logger.i { "Successfully read credential from sector $sector" }
-                        c
-                    } catch (e: Exception) {
-                        Logger.w(e) { "Failed to read credential sector $sector, $e" }
-                        null
-                    }
+                try {
+                    val c = readCredentialSector(tag, sector, keyProvider)
+                    Logger.i { "Successfully read credential from sector $sector" }
+                    c
+                } catch (e: Exception) {
+                    Logger.w(e) { "Failed to read credential sector $sector, $e" }
+                    null
                 }
             }
 
             return GallagherMifareClassic(credentials)
         }
 
-        private fun readCredentialSector(tag: MifareClassic, sector: Int, key: UByteArray, keyType: MifareKeyType): GallagherCredential {
-            tag.authenticateSector(sector, key, keyType)
+        private fun readCredentialSector(tag: MifareClassic, sector: Int, keyProvider: MifareClassicKeyProvider): GallagherCredential {
+            keyProvider.authenticate(tag, sector)
             val credentialBlock = tag.readBlock(MifareClassic.sectorToBlock(sector, 0))
             // The last 8 bytes of the credential block are the bitwise inverse of the first 8.
             if (!(0..7).all { credentialBlock[it] == credentialBlock[it + 8].inv() }) {
