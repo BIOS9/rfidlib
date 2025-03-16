@@ -1,6 +1,7 @@
 package bios9.rfid.gallagher
 
 import bios9.rfid.mifare.classic.MifareClassic
+import bios9.rfid.mifare.classic.MifareClassicKeyProvider
 import bios9.rfid.mifare.classic.MifareKeyType
 import bios9.rfid.mifare.mad.MifareApplicationDirectory
 import io.mockk.*
@@ -21,6 +22,10 @@ class CardApplicationDirectoryTest {
         0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x78u, 0x77u, 0x88u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u
     )
 
+    private val defaultKeyProvider: MifareClassicKeyProvider = MifareClassicKeyProvider { tag, sector ->
+        tag.authenticateSector(sector, cadKeyA, MifareKeyType.KeyA)
+    }
+
     private fun mockClassic(sector: Int, data: UByteArray): MifareClassic {
         val tag = mockk<MifareClassic>()
         every { tag.authenticateSector(sector, cadKeyA, MifareKeyType.KeyA) } just runs
@@ -37,7 +42,7 @@ class CardApplicationDirectoryTest {
         val sector = 14
         val tag = mockClassic(sector, validCadSector)
 
-        val cad = CardAppliationDirectory.readFromMifareClassic(tag, sector)
+        val cad = CardAppliationDirectory.readFromMifareClassic(tag, sector, defaultKeyProvider)
 
         verifySequence {
             tag.authenticateSector(sector, cadKeyA, MifareKeyType.KeyA)
