@@ -13,10 +13,26 @@ class ProxmarkMifareClassic(
     private var lastAuthedSector : Int = 0
 
     /**
-     * Proxmark3 doesn't have a MIFARE Classic "authenticate" command like the Android API.
-     * This means I just have to fake the authentication by saving the key for the next read/write.
+     * Attempts to authenticate to specified sector with specified key, and saves the key for future operations.
      */
+    @OptIn(ExperimentalStdlibApi::class)
     override fun authenticateSector(sector: Int, key: UByteArray, keyType: MifareKeyType) {
+        var command = StringBuilder("hf mf chk ")
+            .append(if (keyType == MifareKeyType.KeyA) "-a " else "-b ")
+            .append("-k ${key.toHexString(HexFormat.UpperCase)} ")
+            .append("--no-default ")
+            .append("--tblk ${MifareClassic.sectorToBlock(sector)}")
+            .toString()
+        val result = client.runCommand(command)
+
+        // Regex to find valid keys in the key A or key B columns (12-character hex key)
+        val keyFoundRegex = """\s*\d{3}\s*\|\s*\d{3}\s*\|\s*(:?(:?([A-F0-9]{12})\s*\|\s*1)|(:?-{12}\s*\|\s*0\s*\|\s*([A-F0-9]{12})))""".toRegex()
+
+        // If we find a match, authentication was successful
+        if (!keyFoundRegex.containsMatchIn(result)) {
+            throw Exception("Authentication failed $sector, ${key.toHexString(HexFormat.UpperCase)}, $keyType")
+        }
+
         lastAuthedSector = sector
         lastKey = key
         lastKeyType = keyType
