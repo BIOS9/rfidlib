@@ -2,6 +2,7 @@ package bios9.rfid.mifare.mad
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import kotlin.test.assertFailsWith
 
 class MadAidTest {
     @Test
@@ -84,5 +85,36 @@ class MadAidTest {
         val aid = MadAid.fromAdministrationCode(MadAdministrationCode.CARDHOLDER_INFO)
         assertEquals(0u.toUByte(), aid.functionClusterCode)
         assertEquals(MadFunctionCluster.CARD_ADMINISTRATION, aid.functionCluster)
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    @Test
+    fun `toString no admin code`() {
+        for (function in 1u..255u) {
+            val function = MadFunctionCluster.fromFunctionClusterCode(function.toUByte())
+            if (function.functionClusterCode == null) continue
+            for (app in 0u..255u) {
+                val aid = MadAid.fromFunction(function, app.toUByte())
+                assertEquals("${function} - ${app} (0x${aid.rawValue.toHexString(HexFormat.UpperCase)})", aid.toString())
+            }
+        }
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    @Test
+    fun `toString admin code`() {
+        val function = MadFunctionCluster.fromFunctionClusterCode(0u.toUByte())
+        for (app in 0u..255u) {
+            val adminCode = MadAdministrationCode.fromApplicationCode(app.toUByte())
+            val aid = MadAid.fromFunction(function, app.toUByte())
+            assertEquals("${adminCode} (0x${aid.rawValue.toHexString(HexFormat.UpperCase)})", aid.toString())
+        }
+    }
+
+    @Test
+    fun `reserved function cluster should fail`() {
+        assertFailsWith<IllegalArgumentException> {
+            MadAid.fromFunction(MadFunctionCluster.RESERVED, 0u.toUByte())
+        }
     }
 }
