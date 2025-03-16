@@ -21,6 +21,7 @@ class MifareApplicationDirectory private constructor (
     companion object {
         val MAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
         val MAD_KEY_B: UByteArray = ubyteArrayOf(0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u)
+        val MAD_ACCESS_BITS: UByteArray = ubyteArrayOf(0x78u, 0x77u, 0x88u) // Key A read, Key B read/write all blocks.
 
         fun create(multiApplicationCard: Boolean, madVersion: UByte, cardPublisherSector: UByte?, applications: Map<Int, MadAid>): MifareApplicationDirectory {
             require(madVersion in 1u .. 2u) { "MAD version must be 1 or 2" }
@@ -119,11 +120,11 @@ class MifareApplicationDirectory private constructor (
             if (madVersion == 2u.toUByte()) {
                 // Sector 16 must be present and readable MADv2
                 keyProvider.authenticate(tag, 16)
-                val sec16block0 = tag.readBlock(MifareClassic.sectorToBlock(16))
+                val sec16block0 = tag.readBlock(MifareClassic.sectorToBlock(16, 0))
                 val madV2Data = (
                         sec16block0.drop(1) + // Drop the CRC
-                        tag.readBlock(MifareClassic.sectorToBlock(16) + 1) +
-                        tag.readBlock(MifareClassic.sectorToBlock(16) + 2)
+                        tag.readBlock(MifareClassic.sectorToBlock(16, 1)) +
+                        tag.readBlock(MifareClassic.sectorToBlock(16, 2))
                     ).toUByteArray()
 
                 // CRC calculation for MADv2 sector 16.
@@ -152,6 +153,58 @@ class MifareApplicationDirectory private constructor (
             }
 
             return create(multiApplicationCard, madVersion, cardPublisherSector, sector0Aids)
+        }
+    }
+
+    /**
+     * Writes MIFARE Application Directory (MAD) to a MIFARE Classic tag.
+     * MAD sectors will be protected with default MAD A and B keys.
+     *
+     * @param tag Tag to write MAD to.
+     * @param keyProvider A key provider used to authenticate with the MIFARE classic tag.
+     */
+    fun writeToMifareClassic(tag: MifareClassic, keyProvider: MifareClassicKeyProvider) {
+        // Authenticate Sector 0 (MADv1)
+        keyProvider.authenticate(tag, 0)
+
+        val madv1Data = buildList {
+            add(cardPublisherSector ?: 0u) // Info Byte (CPS or 0 if absent)
+            applications.filterKeys { it in 1..15 }.values.forEach { aid ->
+                add(aid.rawValue.toUByte())
+                add((aid.rawValue.toUInt() shr 8).toUByte())
+            }
+        }.toUByteArray()
+        val crcV1 = Crc8Mad.compute(madv1Data)
+        val gpb =
+            0b10000000u or // DA bit.
+            (if (multiApplicationCard) 1u shl 6 else 0u) or // MA bit
+            madVersion.toUInt() // ADV bits (MAD version).
+        val madTrailer = MAD_KEY_A + MAD_ACCESS_BITS + ubyteArrayOf(gpb.toUByte()) + MAD_KEY_B
+        val madV1Blocks = ubyteArrayOf(crcV1) + madv1Data + madTrailer
+
+        tag.writeBlock(1, madV1Blocks.sliceArray(0.. 15))
+        tag.writeBlock(2, madV1Blocks.sliceArray(16.. 31))
+        tag.writeBlock(3, madV1Blocks.sliceArray(32.. 47))
+
+        if (madVersion == 2u.toUByte()) {
+            // Authenticate Sector 16 (MADv2)
+            keyProvider.authenticate(tag, 16)
+
+            val madv2Data = buildList {
+                add(cardPublisherSector ?: 0u) // Info Byte (CPS or 0 if absent)
+                applications.filterKeys { it in 17..39 }.values.forEach { aid ->
+                    add(aid.rawValue.toUByte())
+                    add((aid.rawValue.toUInt() shr 8).toUByte())
+                }
+            }.toUByteArray()
+
+            val crcV2 = Crc8Mad.compute(madv2Data)
+            val madV2Blocks = ubyteArrayOf(crcV2) + madv2Data + madTrailer
+
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 0), madV2Blocks.sliceArray(0 .. 15))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 1), madV2Blocks.sliceArray(16 .. 31))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 2), madV2Blocks.sliceArray(32 .. 47))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 3), madV2Blocks.sliceArray(48 .. 63))
         }
     }
 

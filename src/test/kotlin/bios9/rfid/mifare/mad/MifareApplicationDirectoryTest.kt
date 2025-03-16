@@ -17,6 +17,7 @@ import kotlin.test.Test
 @OptIn(ExperimentalUnsignedTypes::class)
 class MifareApplicationDirectoryTest {
     private val madKeyA = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
+    private val madKeyB = ubyteArrayOf(0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u)
 
     private val validSector0 = ubyteArrayOf(
         0x9Du, 0x49u, 0x91u, 0x16u, 0xDEu, 0x28u, 0x02u, 0x00u, 0xE3u, 0x27u, 0x00u, 0x20u, 0x00u, 0x00u, 0x00u, 0x17u,
@@ -39,8 +40,12 @@ class MifareApplicationDirectoryTest {
         0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x78u, 0x77u, 0x88u, 0xC2u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u
     )
 
-    private val defaultKeyProvider: MifareClassicKeyProvider = MifareClassicKeyProvider { tag, sector ->
+    private val defaultReadKeyProvider: MifareClassicKeyProvider = MifareClassicKeyProvider { tag, sector ->
         tag.authenticateSector(sector, madKeyA, MifareKeyType.KeyA)
+    }
+
+    private val defaultWriteKeyProvider: MifareClassicKeyProvider = MifareClassicKeyProvider { tag, sector ->
+        tag.authenticateSector(sector, madKeyB, MifareKeyType.KeyB)
     }
 
     /**
@@ -107,7 +112,7 @@ class MifareApplicationDirectoryTest {
     fun `valid mad v1 should decode`() {
         val tag = mockClassic1k(validSector0)
 
-        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         assertEquals(1u, mad.madVersion)
 
         verifySequence {
@@ -124,7 +129,7 @@ class MifareApplicationDirectoryTest {
         // When GPB is 0x69 it indicates an unpersonalized card.
         val tag = mockClassic1k(validSector0.replaceIndex(57, 0x69u))
         assertFailsWith<NotPersonalizedException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         }
         verifySequence {
             tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -138,7 +143,7 @@ class MifareApplicationDirectoryTest {
         // First bit of GPB is the DA bit.
         val tag = mockClassic1k(validSector0.replaceIndex(57, 0b01000001u))
         assertFailsWith<MadNotFoundException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         }
         verifySequence {
             tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -152,7 +157,7 @@ class MifareApplicationDirectoryTest {
         // Second bit of GPB is the MA bit.
         // Check multi-application.
         val maTag = mockClassic1k(validSector0.replaceIndex(57, 0b11000001u))
-        assertTrue(MifareApplicationDirectory.readFromMifareClassic(maTag, defaultKeyProvider).multiApplicationCard, "Expected multi-application card")
+        assertTrue(MifareApplicationDirectory.readFromMifareClassic(maTag, defaultReadKeyProvider).multiApplicationCard, "Expected multi-application card")
 
         verifySequence {
             maTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -164,7 +169,7 @@ class MifareApplicationDirectoryTest {
 
         // Check single-application.
         val saTag = mockClassic1k(validSector0.replaceIndex(57, 0b10000001u))
-        assertFalse(MifareApplicationDirectory.readFromMifareClassic(saTag, defaultKeyProvider).multiApplicationCard, "Expected single-application card")
+        assertFalse(MifareApplicationDirectory.readFromMifareClassic(saTag, defaultReadKeyProvider).multiApplicationCard, "Expected single-application card")
 
         verifySequence {
             saTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -181,7 +186,7 @@ class MifareApplicationDirectoryTest {
         val tag1 = mockClassic1k(validSector0.replaceIndex(57, 0b11000000u))
         assertFailsWith<InvalidMadVersionException> {
             // 0b00 MAD version bits.
-            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
         }
         verifySequence {
             tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -192,7 +197,7 @@ class MifareApplicationDirectoryTest {
         val tag2 = mockClassic1k(validSector0.replaceIndex(57, 0b11000011u))
         assertFailsWith<InvalidMadVersionException> {
             // 0b11 MAD version bits.
-            MifareApplicationDirectory.readFromMifareClassic(tag2, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag2, defaultReadKeyProvider)
         }
         verifySequence {
             tag2.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -206,7 +211,7 @@ class MifareApplicationDirectoryTest {
         // 17th byte in sector 0 is CRC.
         val tag = mockClassic1k(validSector0.replaceIndex(16, 0u))
         assertFailsWith<InvalidMadCrcException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         }
         verifySequence {
             tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -223,7 +228,7 @@ class MifareApplicationDirectoryTest {
         // CRC must be recalculated when modifying info byte 17.
 
         val nullCpsTag = mockClassic1k(validSector0.replaceIndex(17, 0u).recalculateMadV1Crc())
-        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultKeyProvider).cardPublisherSector)
+        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultReadKeyProvider).cardPublisherSector)
 
         verifySequence {
             nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -235,7 +240,7 @@ class MifareApplicationDirectoryTest {
 
         for (cps in 0x01u .. 0x0Fu) {
             val tag = mockClassic1k(validSector0.replaceIndex(17, cps.toUByte()).recalculateMadV1Crc())
-            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider).cardPublisherSector)
+            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider).cardPublisherSector)
 
             verifySequence {
                 tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -252,7 +257,7 @@ class MifareApplicationDirectoryTest {
         // CPS cannot point to sector 0x10 since that's reserved for MADv2.
         val tag1 = mockClassic1k(validSector0.replaceIndex(17, 0x10u).recalculateMadV1Crc())
         assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
         }
         verifySequence {
             tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -266,7 +271,7 @@ class MifareApplicationDirectoryTest {
         for (info in 0x10u .. 0x3Fu) {
             val tag = mockClassic1k(validSector0.replaceIndex(17, info.toUByte()).recalculateMadV1Crc())
             assertFailsWith<IllegalArgumentException> {
-                MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+                MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
             }
         }
     }
@@ -275,7 +280,7 @@ class MifareApplicationDirectoryTest {
     fun `valid mad v2 should decode`() {
         val tag = mockClassic4k(validSector0.makeMadV2(), validSector16)
 
-        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         assertEquals(2u, mad.madVersion)
 
         verifySequence {
@@ -297,7 +302,7 @@ class MifareApplicationDirectoryTest {
         val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(0, 0u))
 
         assertFailsWith<InvalidMadCrcException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
         }
 
         verifySequence {
@@ -318,7 +323,7 @@ class MifareApplicationDirectoryTest {
         // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
 
         val nullCpsTag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x0u).recalculateMadV2Crc())
-        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultKeyProvider).cardPublisherSector)
+        assertNull(MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultReadKeyProvider).cardPublisherSector)
 
         verifySequence {
             nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -339,7 +344,7 @@ class MifareApplicationDirectoryTest {
             }
 
             val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, cps.toUByte()).recalculateMadV2Crc())
-            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider).cardPublisherSector)
+            assertEquals(cps.toUByte(), MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider).cardPublisherSector)
 
             verifySequence {
                 tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -362,7 +367,7 @@ class MifareApplicationDirectoryTest {
         // CPS cannot point at MAD v2 sector 16 (0x10).
         val tag1 = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x10u).recalculateMadV2Crc())
         assertFailsWith<IllegalArgumentException> {
-            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultKeyProvider)
+            MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
         }
         verifySequence {
             tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
@@ -380,7 +385,7 @@ class MifareApplicationDirectoryTest {
         for (info in 0x28u .. 0x3Fu) {
             val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(1, info.toUByte()).recalculateMadV2Crc())
             assertFailsWith<IllegalArgumentException> {
-                MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+                MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
             }
 
             verifySequence {
@@ -401,7 +406,7 @@ class MifareApplicationDirectoryTest {
     fun `check valid mad v1 applications`() {
         val tag = mockClassic1k(validSector0)
 
-        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
 
         assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
         for (sector in 1..13) {
@@ -425,7 +430,7 @@ class MifareApplicationDirectoryTest {
     fun `check more valid mad v1 applications`() {
         val tag = mockClassic1k(validSector0MoreAids)
 
-        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
 
         assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
         for (sector in 1..15) {
@@ -445,10 +450,10 @@ class MifareApplicationDirectoryTest {
     fun `check valid mad v2 applications`() {
         val tag = mockClassic4k(validSector0MoreAids.makeMadV2(), validSector16)
 
-        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultKeyProvider)
+        val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
 
         assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs.")
-        for (sector in 1..38) {
+        for (sector in 1..39) {
             if (sector == 16) {
                 continue // Skip MADv2 sector.
             }
@@ -621,5 +626,56 @@ class MifareApplicationDirectoryTest {
         val mad = MifareApplicationDirectory.create(true, 2u, null, mapOf())
         assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs")
         assertTrue(mad.applications.all { (_, aid) -> aid == MadAid.fromAdministrationCode(MadAdministrationCode.FREE) }, "Expected all empty apps to be filled with FREE")
+    }
+
+    @Test
+    fun `mad v1 should write correctly`() {
+        val mad = MifareApplicationDirectory.create(true, 1u, null, mapOf(
+            14 to MadAid.fromRaw(0x4811u),
+            15 to MadAid.fromRaw(0x4812u),
+        ))
+
+        val tag = mockk<MifareClassic>()
+        every { tag.authenticateSector(any(), any(), any()) } just runs
+        every { tag.writeBlock(any(), any()) } just runs
+
+        mad.writeToMifareClassic(tag, defaultWriteKeyProvider)
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyB, MifareKeyType.KeyB)
+            tag.writeBlock(1, validSector0.sliceArray(16..31))
+            tag.writeBlock(2, validSector0.sliceArray(32..47))
+            tag.writeBlock(3, ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0x78u, 0x77u, 0x88u, 0xC1u, 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u))
+        }
+
+        confirmVerified(tag)
+    }
+
+    @Test
+    fun `mad v2 should write correctly`() {
+        val mad = MifareApplicationDirectory.create(true, 2u, null,
+            (1..39)
+            .filter { it != 16 }
+            .associateWith { MadAid.fromRaw(it.toUByte().inv(), it.toUByte()) })
+
+        val tag = mockk<MifareClassic>()
+        every { tag.authenticateSector(any(), any(), any()) } just runs
+        every { tag.writeBlock(any(), any()) } just runs
+
+        mad.writeToMifareClassic(tag, defaultWriteKeyProvider)
+
+        verifySequence {
+            tag.authenticateSector(0, madKeyB, MifareKeyType.KeyB)
+            tag.writeBlock(1, validSector0MoreAids.sliceArray(16..31))
+            tag.writeBlock(2, validSector0MoreAids.sliceArray(32..47))
+            tag.writeBlock(3, ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0x78u, 0x77u, 0x88u, 0xC2u, 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u))
+            tag.authenticateSector(16, madKeyB, MifareKeyType.KeyB)
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 0), validSector16.sliceArray(0..15))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 1), validSector16.sliceArray(16..31))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 2), validSector16.sliceArray(32..47))
+            tag.writeBlock(MifareClassic.sectorToBlock(16, 3), ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0x78u, 0x77u, 0x88u, 0xC2u, 0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u))
+        }
+
+        confirmVerified(tag)
     }
 }
