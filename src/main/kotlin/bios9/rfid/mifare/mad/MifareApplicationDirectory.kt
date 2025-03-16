@@ -19,7 +19,8 @@ class MifareApplicationDirectory private constructor (
     val applications: Map<Int, MadAid>
 ) {
     companion object {
-        private val MAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
+        val MAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u)
+        val MAD_KEY_B: UByteArray = ubyteArrayOf(0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u)
 
         fun create(multiApplicationCard: Boolean, madVersion: UByte, cardPublisherSector: UByte?, applications: Map<Int, MadAid>): MifareApplicationDirectory {
             require(madVersion in 1u .. 2u) { "MAD version must be 1 or 2" }
@@ -56,23 +57,6 @@ class MifareApplicationDirectory private constructor (
             require(applications.none { (sector, _) -> sector > maxAppSector }) { "Applications cannot be associated with sectors higher than $maxAppSector for MADv$madVersion" }
 
             return MifareApplicationDirectory(multiApplicationCard, madVersion, cardPublisherSector, allApplications)
-        }
-
-        /**
-         * Read, decode and validate a Mifare Application Directory (MAD) from a Mifare Classic tag.
-         * Uses the default MAD key A for authentication.
-         *
-         * @param tag A Mifare Classic tag that supports reading sectors and uses well-known MAD keys.
-         */
-        fun readFromMifareClassic(tag: MifareClassic): MifareApplicationDirectory {
-            // Implement MifareClassicKeyProvider that simply authenticates using the default MAD key A.
-            return readFromMifareClassic(tag) { t, sector ->
-                t.authenticateSector(
-                    sector,
-                    MAD_KEY_A,
-                    MifareKeyType.KeyA
-                )
-            }
         }
 
         /**

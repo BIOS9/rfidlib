@@ -2,6 +2,7 @@ package bios9.rfid.gallagher
 
 import bios9.rfid.gallagher.exceptions.InvalidCadCrcException
 import bios9.rfid.mifare.classic.MifareClassic
+import bios9.rfid.mifare.classic.MifareClassicKeyProvider
 import bios9.rfid.mifare.classic.MifareKeyType
 import bios9.util.BitReader
 import java.util.BitSet
@@ -11,12 +12,12 @@ class CardAppliationDirectory private constructor(
     val credentials: Map<Pair<UByte, UShort>, Int>
 ) {
     companion object {
-        private val CAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u) // Same as MAD key.
+        val CAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u) // Same as MAD key.
 
-        fun readFromMifareClassic(tag: MifareClassic, sector: Int): CardAppliationDirectory {
+        fun readFromMifareClassic(tag: MifareClassic, sector: Int, keyProvider: MifareClassicKeyProvider): CardAppliationDirectory {
             require(sector in 1..39) { "Card Application Directory must be in sector 1 to 39" }
 
-            tag.authenticateSector(sector, CAD_KEY_A, MifareKeyType.KeyA)
+            keyProvider.authenticate(tag, sector)
 
             // We don't need the sector trailer here.
             val sectorData =

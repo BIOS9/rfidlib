@@ -50,7 +50,7 @@ class GallagherMifareClassic private constructor (
             val cadSector = mad.applications.entries.firstOrNull { (_, aid) -> aid.rawValue == GALLAGHER_CAD_AID.toUShort() }?.key
             val credentialSectors = if (cadSector != null) {
                 // There is a CAD so we can use it to figure out where the credentials are.
-                val cad = CardAppliationDirectory.readFromMifareClassic(tag, cadSector)
+                val cad = CardAppliationDirectory.readFromMifareClassic(tag, cadSector, keyProvider)
                 Logger.d { "Valid Card Application Directory (CAD) found in sector $cadSector - $cad" }
 
                 if (cad.credentials.isEmpty()) {
