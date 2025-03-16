@@ -64,9 +64,18 @@ class ProxmarkMifareClassic(
         throw Exception("Invalid proxmark response")
     }
 
+    @OptIn(ExperimentalStdlibApi::class)
     override fun writeBlock(block: Int, data: UByteArray) {
         checkAuth(MifareClassic.blockToSector(block))
-        TODO("Not yet implemented")
+
+        var command = StringBuilder("hf mf wrbl ")
+            .append("--blk $block ")
+            .append(if (lastKeyType == MifareKeyType.KeyA) "-a " else "-b ")
+            .append("-k ${lastKey!!.toHexString(HexFormat.UpperCase)} ")
+            .append("--data ${data.toHexString(HexFormat.UpperCase)} ")
+            .append("--force")
+            .toString()
+        client.runCommand(command)
     }
 
     private fun checkAuth(sector: Int) {
