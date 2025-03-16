@@ -26,8 +26,9 @@ class MadAid private constructor(
         }
 
         fun fromFunction(functionCluster: MadFunctionCluster, applicationCode: UByte): MadAid {
+            requireNotNull(functionCluster.functionClusterCode) { "Cannot create AID using reserved function cluster." }
             return MadAid(
-                ((functionCluster.functionClusterCode!!.toUInt() shl 8) or applicationCode.toUInt()).toUShort(),
+                ((functionCluster.functionClusterCode.toUInt() shl 8) or applicationCode.toUInt()).toUShort(),
             )
         }
     }
