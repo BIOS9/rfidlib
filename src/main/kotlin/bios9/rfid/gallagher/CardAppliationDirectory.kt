@@ -3,8 +3,8 @@ package bios9.rfid.gallagher
 import bios9.rfid.gallagher.exceptions.InvalidCadCrcException
 import bios9.rfid.mifare.classic.MifareClassic
 import bios9.rfid.mifare.classic.MifareClassicKeyProvider
-import bios9.rfid.mifare.classic.MifareKeyType
 import bios9.util.BitReader
+import bios9.util.BitWriter
 import java.util.BitSet
 
 @OptIn(ExperimentalUnsignedTypes::class)
@@ -13,6 +13,8 @@ class CardAppliationDirectory private constructor(
 ) {
     companion object {
         val CAD_KEY_A: UByteArray = ubyteArrayOf(0xA0u, 0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u) // Same as MAD key.
+        val CAD_KEY_B: UByteArray = ubyteArrayOf(0xB0u, 0xB1u, 0xB2u, 0xB3u, 0xB4u, 0xB5u) // Same as MAD key.
+        val CAD_ACCESS_BITS: UByteArray = ubyteArrayOf(0x78u, 0x77u, 0x88u) // Key A read, Key B read/write all blocks.
 
         fun readFromMifareClassic(tag: MifareClassic, sector: Int, keyProvider: MifareClassicKeyProvider): CardAppliationDirectory {
             require(sector in 1..39) { "Card Application Directory must be in sector 1 to 39" }
@@ -49,6 +51,32 @@ class CardAppliationDirectory private constructor(
 
             return CardAppliationDirectory(mappings)
         }
+    }
+
+    fun writeToMifareClassic(tag: MifareClassic, sector: Int, keyProvider: MifareClassicKeyProvider, cad: CardAppliationDirectory) {
+        require(sector in 1..39) { "Card Application Directory must be in sector 1 to 39" }
+        keyProvider.authenticate(tag, sector)
+
+        val writer = BitWriter()
+        cad.credentials.forEach { (key, sector) ->
+            val (regionCode, facilityCode) = key
+            val mapping = (regionCode.toUInt() shl 24) or (facilityCode.toUInt() shl 8) or sector.toUInt()
+            writer.writeBits(mapping, 28)
+        }
+
+        while (writer.size() < 42 * 8) {
+            writer.writeBits(0u, 28)
+        }
+
+        val data = ubyteArrayOf(0x00u, 0x00u) + writer.toUByteArray()
+        val crc = Crc16Cad.compute(data)
+        val cadTrailer = CAD_KEY_A + CAD_ACCESS_BITS + ubyteArrayOf(0u.toUByte()) + CAD_KEY_B
+        val finalData = ubyteArrayOf((crc.toUInt() shr 8).toUByte(), crc.toUByte()) + data + cadTrailer
+
+        tag.writeBlock(MifareClassic.sectorToBlock(sector, 0), finalData.sliceArray(0 .. 15))
+        tag.writeBlock(MifareClassic.sectorToBlock(sector, 1), finalData.sliceArray(16 .. 31))
+        tag.writeBlock(MifareClassic.sectorToBlock(sector, 2), finalData.sliceArray(32 .. 47))
+        tag.writeBlock(MifareClassic.sectorToBlock(sector, 3), finalData.sliceArray(48 .. 63))
     }
 
     override fun toString(): String {
