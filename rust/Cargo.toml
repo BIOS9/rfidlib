@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "gallagher-rfid-core",
+    "gallagher-rfid-acr122u",
+    "gallagher-rfid-cli",
+]
