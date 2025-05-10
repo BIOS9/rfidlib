@@ -5,6 +5,7 @@ use std::fmt;
 pub enum SmartCardError {
     ContextInitFailed(String),
     ReaderListFailed(String),
+    CardConnectFailed(String),
 }
 
 impl fmt::Display for SmartCardError {
@@ -12,6 +13,7 @@ impl fmt::Display for SmartCardError {
         match self {
             SmartCardError::ContextInitFailed(msg) => write!(f, "Context initialization failed: {}", msg),
             SmartCardError::ReaderListFailed(msg) => write!(f, "Reader list failed: {}", msg),
+            SmartCardError::CardConnectFailed(msg) => write!(f, "Card connect failed: {}", msg),
         }
     }
 }
