@@ -15,6 +15,10 @@ dependencies {
   implementation("co.touchlab:kermit:2.0.5")
 }
 
+java {
+  toolchain.languageVersion.set(JavaLanguageVersion.of(23))
+}
+
 tasks.test {
   jvmArgs("-XX:+EnableDynamicAgentLoading")
   useJUnitPlatform()
