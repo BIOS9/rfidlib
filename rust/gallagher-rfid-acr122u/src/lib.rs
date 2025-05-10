@@ -1,19 +1,10 @@
-#![no_std]
-
-#[cfg(feature = "std")]
-extern crate std;
-
-pub mod error;
-pub mod transport;
-
-pub use transport::RfidTransport;
+use gallagher_rfid_core::{transport::RfidTransport, error::RfidError};
 
 pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-    
+    return 0;
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

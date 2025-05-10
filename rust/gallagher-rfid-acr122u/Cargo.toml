@@ -1,0 +1,7 @@
+[package]
+name = "gallagher-rfid-acr122u"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gallagher-rfid-core = { path = "../gallagher-rfid-core" }
