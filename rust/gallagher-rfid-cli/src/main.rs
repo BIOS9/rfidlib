@@ -1,4 +1,4 @@
-use gallagher_rfid_pcsc::{smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
+use gallagher_rfid_pcsc::{acr122u::Acr122uReader, smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
 
 fn main() {
     let context = SmartCardContext::establish().unwrap();
@@ -8,7 +8,7 @@ fn main() {
         println!("Found reader: {}", reader.name);
     }
 
-    let reader = match readers.iter().find(|reader| reader.name.starts_with("ACS ACR122")) {
+    let reader = match readers.into_iter().find(|reader| reader.name.starts_with("ACS ACR122")) {
         Some(reader) => reader,
         None => {
             panic!("Failed to find ACR122u smart card reader!");
@@ -17,5 +17,9 @@ fn main() {
     
     println!("Using reader: {}", reader.name);
 
-    let card = reader.connect_to_card().unwrap();
+    let acr122u = Acr122uReader::try_from(reader).unwrap();
+    let mut acr122u_card = acr122u.connect_to_card().unwrap();
+    acr122u_card.blink();
+    acr122u_card.blink();
+    acr122u_card.blink();
 }

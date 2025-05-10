@@ -6,6 +6,8 @@ pub enum SmartCardError {
     ContextInitFailed(String),
     ReaderListFailed(String),
     CardConnectFailed(String),
+    CardCommunicateFailed(String),
+    UnsupportedReader(String),
 }
 
 impl fmt::Display for SmartCardError {
@@ -14,6 +16,8 @@ impl fmt::Display for SmartCardError {
             SmartCardError::ContextInitFailed(msg) => write!(f, "Context initialization failed: {}", msg),
             SmartCardError::ReaderListFailed(msg) => write!(f, "Reader list failed: {}", msg),
             SmartCardError::CardConnectFailed(msg) => write!(f, "Card connect failed: {}", msg),
+            SmartCardError::CardCommunicateFailed(msg) => write!(f, "Communication with card failed: {}", msg),
+            SmartCardError::UnsupportedReader(msg) => write!(f, "The selected reader is not supported: {}", msg),
         }
     }
 }
