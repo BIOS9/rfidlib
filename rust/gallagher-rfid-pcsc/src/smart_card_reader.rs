@@ -21,7 +21,7 @@ impl<'a> SmartCardReader<'a> {
                 "Reader name contains null byte: {}", err
             )))?;
         
-        match pcsc_context.connect(c_name.as_c_str(), ShareMode::Shared, Protocols::ANY) {
+        match pcsc_context.connect(c_name.as_c_str(), ShareMode::Exclusive, Protocols::ANY) {
             Ok(pcsc_card) => Ok(SmartCard::new(pcsc_card)),
             Err(pcsc::Error::RemovedCard | pcsc::Error::NoSmartcard) => {
                 Err(SmartCardError::CardConnectFailed(
