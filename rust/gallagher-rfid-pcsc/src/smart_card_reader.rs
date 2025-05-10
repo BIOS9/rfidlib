@@ -22,7 +22,7 @@ impl<'a> SmartCardReader<'a> {
             )))?;
         
         match pcsc_context.connect(c_name.as_c_str(), ShareMode::Shared, Protocols::ANY) {
-            Ok(card) => Ok(SmartCard{}),
+            Ok(pcsc_card) => Ok(SmartCard::new(pcsc_card)),
             Err(pcsc::Error::RemovedCard | pcsc::Error::NoSmartcard) => {
                 Err(SmartCardError::CardConnectFailed(
                     "Smart card not present in the reader".to_string()

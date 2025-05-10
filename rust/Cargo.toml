@@ -2,6 +2,6 @@
 resolver = "2"
 members = [
     "gallagher-rfid-core",
-    "gallagher-rfid-acr122u",
+    "gallagher-rfid-pcsc",
     "gallagher-rfid-cli",
 ]

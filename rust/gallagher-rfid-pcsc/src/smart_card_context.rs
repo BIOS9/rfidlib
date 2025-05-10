@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use crate::{error::SmartCardError, smart_card_reader::SmartCardReader};
 
 pub struct SmartCardContext {
