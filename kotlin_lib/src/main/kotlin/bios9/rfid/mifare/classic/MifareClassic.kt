@@ -11,6 +11,8 @@ interface MifareClassic {
   fun writeBlock(block: Int, data: UByteArray)
 
   companion object {
+    val DEFAULT_KEY: UByteArray = ubyteArrayOf(0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu)
+
     fun sectorToBlock(sector: Int): Int {
       return sectorToBlock(sector, 0)
     }
