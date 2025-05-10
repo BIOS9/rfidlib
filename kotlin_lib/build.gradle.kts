@@ -1,6 +1,6 @@
 plugins {
   kotlin("jvm") version "2.1.10"
-#  id("com.ncorti.ktfmt.gradle") version "0.22.0"
+//  id("com.ncorti.ktfmt.gradle") version "0.22.0"
 }
 
 group = "bios9"
