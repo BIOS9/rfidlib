@@ -20,6 +20,13 @@ impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
 
     fn try_from(reader: SmartCardReader<'a>) -> Result<Self, Self::Error> {
         let mut card = reader.connect_to_card()?;
+        
+        let vendor = card.get_vendor()?;
+        if vendor != "ACS" {
+            return Err(SmartCardError::UnsupportedReader(format!(
+                "Unexpected vendor for ACR122u: {}", vendor)));
+        }
+
         let get_firmware_version = b"\xFF\x00\x48\x00\x00";
         let response = card.transmit_apdu(get_firmware_version)?;
 
@@ -31,6 +38,5 @@ impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
                 "Unexpected firmware version for ACR122u: {}", firmware
             )))
         }
-
     }
 }
