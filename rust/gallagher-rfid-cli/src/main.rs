@@ -1,4 +1,4 @@
-use gallagher_rfid_acr122u::{smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
+use gallagher_rfid_pcsc::{smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
 
 fn main() {
     let context = SmartCardContext::establish().unwrap();

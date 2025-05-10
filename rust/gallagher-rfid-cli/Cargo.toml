@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gallagher-rfid-acr122u = { path = "../gallagher-rfid-acr122u" }
+gallagher-rfid-pcsc = { path = "../gallagher-rfid-pcsc" }

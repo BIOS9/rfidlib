@@ -9,23 +9,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
 
 [[package]]
-name = "gallagher-rfid-acr122u"
-version = "0.1.0"
-dependencies = [
- "gallagher-rfid-core",
- "pcsc",
-]
-
-[[package]]
 name = "gallagher-rfid-cli"
 version = "0.1.0"
 dependencies = [
- "gallagher-rfid-acr122u",
+ "gallagher-rfid-pcsc",
 ]
 
 [[package]]
 name = "gallagher-rfid-core"
 version = "0.1.0"
+
+[[package]]
+name = "gallagher-rfid-pcsc"
+version = "0.1.0"
+dependencies = [
+ "gallagher-rfid-core",
+ "pcsc",
+]
 
 [[package]]
 name = "pcsc"
