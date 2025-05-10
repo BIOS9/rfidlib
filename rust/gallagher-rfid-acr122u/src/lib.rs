@@ -1,16 +1,30 @@
+use error::SmartCardError;
 use gallagher_rfid_core::{transport::RfidTransport, error::RfidError};
+use pcsc::{Context, Scope};
+use smart_card_reader::SmartCardReader;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    return 0;
-}
+pub mod smart_card_reader;
+pub mod error;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn get_readers() -> Result<impl Iterator<Item = SmartCardReader>, SmartCardError>{
+    let ctx = Context::establish(Scope::User)
+        .map_err(|err| SmartCardError::ContextInitFailed(format!(
+            "Failed to initialize PCSC smart card context: {}", err)))?;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    let reader_names_size = ctx.list_readers_len()
+        .map_err(|err| SmartCardError::ReaderListFailed(format!(
+            "Failed to get size of reader string: {}", err)))?;
+
+    let mut reader_names_buf = vec![0u8; reader_names_size];
+    let reader_names: Vec<String> = ctx.list_readers(&mut reader_names_buf)
+        .map_err(|err| SmartCardError::ReaderListFailed(format!(
+            "Failed to get smart card readers: {}", err)))?
+        .map(|name| name.to_string_lossy().to_string())
+        .collect();
+    
+    let readers = reader_names
+        .into_iter()
+        .map(|name| SmartCardReader{ name });
+
+    Ok(readers)
 }
