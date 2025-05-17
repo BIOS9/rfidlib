@@ -16,4 +16,17 @@ impl Acr122uCard {
 
         Ok(())
     }
+
+    pub fn set_card_detect_beep(&mut self, beep: bool) -> Result<(), SmartCardError> {
+        let beep_byte = if beep { 0xFF } else { 0x00 };
+        let beep_apdu = [0xFF, 0x00, 0x52, beep_byte, 0x00];
+
+        let response = self.smart_card.transmit_apdu(&beep_apdu)?;
+
+        return match response.as_slice() {
+            [0x90, b] if *b == beep_byte => Ok(()),
+            _ => Err(SmartCardError::CardCommunicateFailed(format!(
+                "Failed to disable card detect beep, reader returned: {:02X?}", response)))
+        }
+    }
 }
