@@ -19,7 +19,9 @@ fn main() {
 
     let acr122u = Acr122uReader::try_from(reader).unwrap();
     let mut acr122u_card = acr122u.connect_to_card().unwrap();
-    acr122u_card.blink();
-    acr122u_card.blink();
-    acr122u_card.blink();
+    acr122u_card.set_card_detect_beep(false).unwrap();
+    
+    // acr122u_card.blink();
+    // acr122u_card.blink();
+    // acr122u_card.blink();
 }
