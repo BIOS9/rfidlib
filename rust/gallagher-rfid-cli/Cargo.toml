@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 gallagher-rfid-pcsc = { path = "../gallagher-rfid-pcsc" }
+gallagher-rfid-core = { path = "../gallagher-rfid-core" }

@@ -1,3 +1,5 @@
+use gallagher_rfid_core::{mifare_classic::{sector_to_block, MifareClassic, MifareClassicKeyType}, mifare_classic_error::MifareClassicError};
+
 use crate::{error::SmartCardError, smart_card::SmartCard};
 
 pub struct Acr122uCard {
@@ -28,5 +30,49 @@ impl Acr122uCard {
             _ => Err(SmartCardError::CardCommunicateFailed(format!(
                 "Failed to disable card detect beep, reader returned: {:02X?}", response)))
         }
+    }
+}
+
+impl MifareClassic for Acr122uCard {
+    fn authenticate(
+        &mut self,
+        sector: u8,
+        key: [u8; 6],
+        key_type: MifareClassicKeyType,
+    ) -> Result<(), MifareClassicError> {
+         let block = sector_to_block(sector)
+            .ok_or(MifareClassicError::InvalidSector(sector))?;
+
+        // Load key into volatile memory (slot 0)
+       let load_key_apdu: [u8; 11] = {
+            let mut apdu = [0u8; 11];
+            apdu[..5].copy_from_slice(&[0xFF, 0x82, 0x00, 0x00, 0x06]);
+            apdu[5..].copy_from_slice(&key);
+            apdu
+        };
+        match self.smart_card.transmit_apdu(&load_key_apdu)?.as_slice() {
+            [0x90, 0x00] => Ok(()),
+            [sw1, sw2] => Err(SmartCardError::CardCommunicateFailed(format!("Unexpected response when loading Mifare key SW1/SW2: {:02X} {:02X}", *sw1, *sw2))),
+            _ => Err(SmartCardError::CardCommunicateFailed("Unexpected response when loading Mifare key".to_string()))
+        }?;
+
+        // Authenticate to that block
+        let key_type_code = match key_type {
+            MifareClassicKeyType::KeyA => 0x60,
+            MifareClassicKeyType::KeyB => 0x61,
+        };
+        let auth_apdu = [
+            0xFF, 0x86, 0x00, 0x00, 0x05,
+            0x01, 0x00, block,
+            key_type_code, 0x00
+        ];
+
+        match self.smart_card.transmit_apdu(&auth_apdu)?.as_slice() {
+            [0x90, 0x00] => Ok(()),
+            [sw1, sw2] => Err(SmartCardError::CardCommunicateFailed(format!("Unexpected response when authenticating Mifare block SW1/SW2: {:02X} {:02X}", *sw1, *sw2))),
+            _ => Err(SmartCardError::CardCommunicateFailed("Unexpected response when authenticating Mifare block".to_string()))
+        }?;
+
+        Ok(())
     }
 }

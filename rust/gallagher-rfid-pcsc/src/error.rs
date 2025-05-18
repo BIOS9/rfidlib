@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::fmt;
 
+use gallagher_rfid_core::mifare_classic_error::MifareClassicError;
+
 #[derive(Debug)]
 pub enum SmartCardError {
     ContextInitFailed(String),
@@ -23,3 +25,9 @@ impl fmt::Display for SmartCardError {
 }
 
 impl std::error::Error for SmartCardError {}
+
+impl From<SmartCardError> for MifareClassicError {
+    fn from(err: SmartCardError) -> Self {
+        MifareClassicError::TransportError(err.to_string())
+    }
+}

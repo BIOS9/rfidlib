@@ -1,5 +1,5 @@
 use gallagher_rfid_pcsc::{acr122u::Acr122uReader, smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
-
+use gallagher_rfid_core::mifare_classic::{MifareClassic, MifareClassicKeyType};
 fn main() {
     let context = SmartCardContext::establish().unwrap();
     let readers: Vec<SmartCardReader> = context.get_readers().unwrap().collect();
@@ -20,7 +20,7 @@ fn main() {
     let acr122u = Acr122uReader::try_from(reader).unwrap();
     let mut acr122u_card = acr122u.connect_to_card().unwrap();
     acr122u_card.set_card_detect_beep(false).unwrap();
-    
+    acr122u_card.authenticate(0, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], MifareClassicKeyType::KeyA).unwrap();
     // acr122u_card.blink();
     // acr122u_card.blink();
     // acr122u_card.blink();

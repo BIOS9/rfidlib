@@ -5,6 +5,8 @@ extern crate std;
 
 pub mod error;
 pub mod transport;
+pub mod mifare_classic;
+pub mod mifare_classic_error;
 
 pub use transport::RfidTransport;
 
