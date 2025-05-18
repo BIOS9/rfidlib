@@ -75,4 +75,44 @@ impl MifareClassic for Acr122uCard {
 
         Ok(())
     }
+
+    fn read_block(&mut self, block: u8) -> Result<[u8; 16], MifareClassicError> {
+        let apdu = [0xFF, 0xB0, 0x00, block, 0x10];
+
+        let response = self.smart_card.transmit_apdu(&apdu)?;
+        match response.as_slice() {
+            [data @ .., 0x90, 0x00] if data.len() == 16 => {
+                let mut out = [0u8; 16];
+                out.copy_from_slice(data);
+                Ok(out)
+            }
+            [.., sw1, sw2] => Err(MifareClassicError::TransportError(format!(
+                "Unexpected response when reading block {}: SW1/SW2 = {:02X} {:02X}",
+                block, *sw1, *sw2,
+            ))),
+            _ => Err(MifareClassicError::TransportError(format!(
+                "Invalid response length when reading block {}",
+                block,
+            ))),
+        }
+    }
+
+    fn write_block(&mut self, block: u8, data: [u8; 16]) -> Result<(), MifareClassicError> {
+        let mut apdu = [0u8; 21];
+        apdu[..5].copy_from_slice(&[0xFF, 0xD6, 0x00, block, 0x10]);
+        apdu[5..].copy_from_slice(&data);
+
+        let response = self.smart_card.transmit_apdu(&apdu)?;
+        match response.as_slice() {
+            [0x90, 0x00] => Ok(()),
+            [sw1, sw2] => Err(MifareClassicError::TransportError(format!(
+                "Unexpected response when writing block {}: SW1/SW2 = {:02X} {:02X}",
+                block, *sw1, *sw2,
+            ))),
+            _ => Err(MifareClassicError::TransportError(format!(
+                "Invalid response when writing block {}",
+                block,
+            ))),
+        }
+    }
 }
