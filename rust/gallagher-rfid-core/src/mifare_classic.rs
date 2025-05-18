@@ -16,11 +16,11 @@ pub trait MifareClassic {
         key_type: MifareClassicKeyType,
     ) -> Result<(), MifareClassicError>;
 
-    // /// Read 16 bytes from a block.
-    // fn read_block(&mut self, block: u8) -> Result<[u8; 16], SmartCardError>;
+    /// Read 16 bytes from a block.
+    fn read_block(&mut self, block: u8) -> Result<[u8; 16], MifareClassicError>;
 
     // /// Write 16 bytes to a block.
-    // fn write_block(&mut self, block: u8, data: [u8; 16]) -> Result<(), SmartCardError>;
+    fn write_block(&mut self, block: u8, data: [u8; 16]) -> Result<(), MifareClassicError>;
 }
 
 pub fn sector_to_block(sector: u8) -> Option<u8> {
