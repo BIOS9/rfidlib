@@ -1,4 +1,4 @@
-use gallagher_rfid_core::{mifare_classic::{sector_to_block, MifareClassic, MifareClassicKeyType}, mifare_classic_error::MifareClassicError};
+use gallagher_rfid_core::mifare::classic::{MifareClassic, MifareClassicBlock, MifareClassicError, MifareClassicKeyType};
 
 use crate::{error::SmartCardError, smart_card::SmartCard};
 
@@ -14,7 +14,7 @@ impl Acr122uCard {
     pub fn blink(&mut self) -> Result<(), SmartCardError>{
         let blink = b"\xFF\x00\x40\x50\x04\x05\x05\x03\x01";
 
-        let response = self.smart_card.transmit_apdu(blink)?;
+        _ = self.smart_card.transmit_apdu(blink)?;
 
         Ok(())
     }
@@ -40,9 +40,6 @@ impl MifareClassic for Acr122uCard {
         key: [u8; 6],
         key_type: MifareClassicKeyType,
     ) -> Result<(), MifareClassicError> {
-         let block = sector_to_block(sector)
-            .ok_or(MifareClassicError::InvalidSector(sector))?;
-
         // Load key into volatile memory (slot 0)
        let load_key_apdu: [u8; 11] = {
             let mut apdu = [0u8; 11];
@@ -63,7 +60,7 @@ impl MifareClassic for Acr122uCard {
         };
         let auth_apdu = [
             0xFF, 0x86, 0x00, 0x00, 0x05,
-            0x01, 0x00, block,
+            0x01, 0x00, MifareClassicBlock::from(sector).into(),
             key_type_code, 0x00
         ];
 
@@ -76,8 +73,8 @@ impl MifareClassic for Acr122uCard {
         Ok(())
     }
 
-    fn read_block(&mut self, block: u8) -> Result<[u8; 16], MifareClassicError> {
-        let apdu = [0xFF, 0xB0, 0x00, block, 0x10];
+    fn read_block(&mut self, block: MifareClassicBlock) -> Result<[u8; 16], MifareClassicError> {
+        let apdu = [0xFF, 0xB0, 0x00, block.into(), 0x10];
 
         let response = self.smart_card.transmit_apdu(&apdu)?;
         match response.as_slice() {
@@ -97,9 +94,9 @@ impl MifareClassic for Acr122uCard {
         }
     }
 
-    fn write_block(&mut self, block: u8, data: [u8; 16]) -> Result<(), MifareClassicError> {
+    fn write_block(&mut self, block: MifareClassicBlock, data: [u8; 16]) -> Result<(), MifareClassicError> {
         let mut apdu = [0u8; 21];
-        apdu[..5].copy_from_slice(&[0xFF, 0xD6, 0x00, block, 0x10]);
+        apdu[..5].copy_from_slice(&[0xFF, 0xD6, 0x00, block.into(), 0x10]);
         apdu[5..].copy_from_slice(&data);
 
         let response = self.smart_card.transmit_apdu(&apdu)?;

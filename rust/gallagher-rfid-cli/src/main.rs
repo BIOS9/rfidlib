@@ -1,5 +1,5 @@
 use gallagher_rfid_pcsc::{acr122u::Acr122uReader, smart_card_context::SmartCardContext, smart_card_reader::SmartCardReader};
-use gallagher_rfid_core::mifare_classic::{sector_offset_to_block, MifareClassic, MifareClassicKeyType};
+use gallagher_rfid_core::mifare::classic::{MifareClassic, MifareClassicKeyType};
 fn main() {
     let context = SmartCardContext::establish().unwrap();
     let readers: Vec<SmartCardReader> = context.get_readers().unwrap().collect();
@@ -20,11 +20,11 @@ fn main() {
     let acr122u = Acr122uReader::try_from(reader).unwrap();
     let mut acr122u_card = acr122u.connect_to_card().unwrap();
     acr122u_card.set_card_detect_beep(false).unwrap();
-    acr122u_card.authenticate(1, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], MifareClassicKeyType::KeyA).unwrap();
+    acr122u_card.authenticate(0.into(), [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], MifareClassicKeyType::KeyA).unwrap();
     // acr122u_card.authenticate(0, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], MifareClassicKeyType::KeyA).unwrap();
     let block: [u8; 16] = (0..16).collect::<Vec<u8>>().try_into().unwrap();
-    acr122u_card.write_block(sector_offset_to_block(1, 0).unwrap(), block).unwrap();
-    let block = acr122u_card.read_block(sector_offset_to_block(1, 0).unwrap());
+    acr122u_card.write_block(1.try_into().unwrap(), block).unwrap();
+    let block = acr122u_card.read_block(1.try_into().unwrap());
     println!("Block data: {:02X?}", block);
     // acr122u_card.blink();
     // acr122u_card.blink();
