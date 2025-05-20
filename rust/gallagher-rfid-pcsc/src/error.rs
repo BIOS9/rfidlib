@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::fmt;
 
-use gallagher_rfid_core::mifare_classic_error::MifareClassicError;
+use gallagher_rfid_core::mifare::classic::MifareClassicError;
 
 #[derive(Debug)]
 pub enum SmartCardError {

@@ -5,9 +5,7 @@ extern crate std;
 
 pub mod error;
 pub mod transport;
-pub mod mifare_classic;
-pub mod mifare_classic_error;
-
+pub mod mifare;
 pub use transport::RfidTransport;
 
 pub fn add(left: u64, right: u64) -> u64 {
