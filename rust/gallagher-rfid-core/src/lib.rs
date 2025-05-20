@@ -4,13 +4,12 @@
 extern crate std;
 
 pub mod error;
-pub mod transport;
 pub mod mifare;
+pub mod transport;
 pub use transport::RfidTransport;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
-    
 }
 
 #[cfg(all(test, feature = "std"))]

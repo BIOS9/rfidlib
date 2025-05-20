@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::fmt;
+use std::fmt::Debug;
 
 use gallagher_rfid_core::mifare::classic::MifareClassicError;
 
@@ -15,11 +15,17 @@ pub enum SmartCardError {
 impl fmt::Display for SmartCardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SmartCardError::ContextInitFailed(msg) => write!(f, "Context initialization failed: {}", msg),
+            SmartCardError::ContextInitFailed(msg) => {
+                write!(f, "Context initialization failed: {}", msg)
+            }
             SmartCardError::ReaderListFailed(msg) => write!(f, "Reader list failed: {}", msg),
             SmartCardError::CardConnectFailed(msg) => write!(f, "Card connect failed: {}", msg),
-            SmartCardError::CardCommunicateFailed(msg) => write!(f, "Communication with card failed: {}", msg),
-            SmartCardError::UnsupportedReader(msg) => write!(f, "The selected reader is not supported: {}", msg),
+            SmartCardError::CardCommunicateFailed(msg) => {
+                write!(f, "Communication with card failed: {}", msg)
+            }
+            SmartCardError::UnsupportedReader(msg) => {
+                write!(f, "The selected reader is not supported: {}", msg)
+            }
         }
     }
 }
