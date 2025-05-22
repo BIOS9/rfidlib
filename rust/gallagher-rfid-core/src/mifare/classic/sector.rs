@@ -2,7 +2,7 @@ use core::{fmt, mem::transmute};
 
 use super::{
     block::{Block, FourBlockOffset, SixteenBlockOffset},
-    mifare_classic::Error,
+    tag::Error,
 };
 
 /// Represents a valid MIFARE Classic 4 block sector index from 0 to 31.
