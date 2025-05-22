@@ -19,6 +19,7 @@ impl FourBlockOffset {
     /// This code will panic if `block` is greater than 3 because there are only four blocks in some MIFARE classic sectors.
     fn from_u8(block: u8) -> Self {
         assert!(block <= Self::B3 as u8);
+        // SAFETY: Block value bounds checked by assertion.
         unsafe { transmute(block) }
     }
 }
@@ -64,6 +65,7 @@ impl SixteenBlockOffset {
     /// This code will panic if `block` is greater than 15 because there are only sixteen blocks in some MIFARE classic sectors.
     fn from_u8(block: u8) -> Self {
         assert!(block <= Self::B15 as u8);
+        // SAFETY: Block value bounds checked by assertion.
         unsafe { transmute(block) }
     }
 }

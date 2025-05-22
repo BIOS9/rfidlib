@@ -52,6 +52,7 @@ impl FourBlockSector {
     /// This code will panic if `sector` is greater than 31 because there are only 32 four block sectors in MIFARE classic.
     fn from_u8(sector: u8) -> Self {
         assert!(sector <= Self::S31 as u8);
+        // SAFETY: Sector value bounds checked by assertion.
         unsafe { transmute(sector) }
     }
 }
@@ -96,6 +97,7 @@ impl SixteenBlockSector {
     fn from_u8(sector: u8) -> Self {
         assert!(sector >= Self::S32 as u8);
         assert!(sector <= Self::S39 as u8);
+        // SAFETY: Sector value bounds checked by assertions.
         unsafe { transmute(sector) }
     }
 }
