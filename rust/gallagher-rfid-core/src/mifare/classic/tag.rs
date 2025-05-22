@@ -1,6 +1,6 @@
 use std::string::String;
 
-use super::{block::Block, sector::Sector};
+use crate::mifare::classic::{Block, Sector};
 
 /// Represents which MIFARE Classic key to use for authentication.
 #[derive(Debug, Clone, Copy)]

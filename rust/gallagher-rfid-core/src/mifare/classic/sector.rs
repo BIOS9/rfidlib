@@ -1,9 +1,6 @@
 use core::{fmt, mem::transmute};
 
-use super::{
-    block::{Block, FourBlockOffset, SixteenBlockOffset},
-    tag::Error,
-};
+use crate::mifare::classic::{Block, Error, FourBlockOffset, SixteenBlockOffset};
 
 /// Represents a valid MIFARE Classic 4 block sector index from 0 to 31.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

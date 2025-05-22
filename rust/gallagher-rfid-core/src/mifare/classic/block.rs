@@ -1,9 +1,6 @@
 use core::{fmt, mem::transmute};
 
-use super::{
-    sector::{FourBlockSector, Sector, Sector::*, SixteenBlockSector},
-    Error,
-};
+use crate::mifare::classic::{Error, FourBlockSector, Sector, Sector::*, SixteenBlockSector};
 
 /// Represents offset of blocks in a four block MIFARE Classic sector.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

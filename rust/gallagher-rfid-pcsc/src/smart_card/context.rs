@@ -1,4 +1,4 @@
-use crate::{error::SmartCardError, smart_card_reader::SmartCardReader};
+use crate::{smart_card::Error, smart_card::SmartCardReader};
 
 pub struct SmartCardContext {
     pcsc_context: pcsc::Context,
@@ -9,32 +9,29 @@ impl SmartCardContext {
         &self.pcsc_context
     }
 
-    pub fn establish() -> Result<SmartCardContext, SmartCardError> {
+    pub fn establish() -> Result<SmartCardContext, Error> {
         match pcsc::Context::establish(pcsc::Scope::User) {
             Ok(pcsc_context) => Ok(SmartCardContext { pcsc_context }),
-            Err(err) => Err(SmartCardError::ContextInitFailed(format!(
+            Err(err) => Err(Error::ContextInitFailed(format!(
                 "Failed to initialize PCSC smart card context: {}",
                 err
             ))),
         }
     }
 
-    pub fn get_readers(&self) -> Result<impl Iterator<Item = SmartCardReader>, SmartCardError> {
+    pub fn get_readers(&self) -> Result<impl Iterator<Item = SmartCardReader>, Error> {
         let reader_c_names = self
             .pcsc_context
             .list_readers_owned()
             .map_err(|err| {
-                SmartCardError::ReaderListFailed(format!(
-                    "Failed to get smart card readers: {}",
-                    err
-                ))
+                Error::ReaderListFailed(format!("Failed to get smart card readers: {}", err))
             })?
             .into_iter();
 
         let reader_names: Vec<String> = reader_c_names
             .map(|name| {
                 let s = name.to_str().map_err(|err| {
-                    SmartCardError::ReaderListFailed(format!(
+                    Error::ReaderListFailed(format!(
                         "Failed to convert reader name to valid UTF-8 string: {}",
                         err
                     ))

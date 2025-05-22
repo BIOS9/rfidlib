@@ -1,4 +1,7 @@
-use crate::{acr122u_card::Acr122uCard, error::SmartCardError, smart_card_reader::SmartCardReader};
+use crate::{
+    acr122u::Acr122uCard,
+    smart_card::{Error, SmartCardReader},
+};
 
 pub struct Acr122uReader<'a> {
     reader: SmartCardReader<'a>,
@@ -9,21 +12,21 @@ impl<'a> Acr122uReader<'a> {
         Acr122uReader { reader }
     }
 
-    pub fn connect_to_card(&self) -> Result<Acr122uCard, SmartCardError> {
+    pub fn connect_to_card(&self) -> Result<Acr122uCard, Error> {
         let smart_card = self.reader.connect_to_card()?;
         Ok(Acr122uCard::new(smart_card))
     }
 }
 
 impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
-    type Error = SmartCardError;
+    type Error = Error;
 
     fn try_from(reader: SmartCardReader<'a>) -> Result<Self, Self::Error> {
         let mut card = reader.connect_to_card()?;
 
         let vendor = card.get_vendor()?;
         if vendor != "ACS" {
-            return Err(SmartCardError::UnsupportedReader(format!(
+            return Err(Error::UnsupportedReader(format!(
                 "Unexpected vendor for ACR122u: {}",
                 vendor
             )));
@@ -36,7 +39,7 @@ impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
         if firmware.starts_with("ACR122U") {
             Ok(Acr122uReader::new(reader))
         } else {
-            Err(SmartCardError::UnsupportedReader(format!(
+            Err(Error::UnsupportedReader(format!(
                 "Unexpected firmware version for ACR122u: {}",
                 firmware
             )))

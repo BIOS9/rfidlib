@@ -1,7 +1,6 @@
-use gallagher_rfid_core::mifare::classic::{MifareClassic, MifareClassicKeyType};
+use gallagher_rfid_core::mifare::classic::{FourBlockSector, KeyType, Tag};
 use gallagher_rfid_pcsc::{
-    acr122u::Acr122uReader, smart_card_context::SmartCardContext,
-    smart_card_reader::SmartCardReader,
+    acr122u::Acr122uReader, smart_card::SmartCardContext, smart_card::SmartCardReader,
 };
 fn main() {
     let context = SmartCardContext::establish().unwrap();
@@ -28,9 +27,9 @@ fn main() {
     acr122u_card.set_card_detect_beep(false).unwrap();
     acr122u_card
         .authenticate(
-            0.into(),
+            FourBlockSector::S0.into(),
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-            MifareClassicKeyType::KeyA,
+            KeyType::KeyA,
         )
         .unwrap();
     // acr122u_card.authenticate(0, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], MifareClassicKeyType::KeyA).unwrap();
