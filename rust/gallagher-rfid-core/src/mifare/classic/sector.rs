@@ -184,7 +184,6 @@ impl From<Block> for Sector {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::format;
 
     #[test]
     fn four_block_sector_try_from_u8() {
@@ -245,6 +244,7 @@ mod test {
             assert_eq!(i, sector as u8);
         }
 
+        #[cfg(feature = "std")]
         for i in 32u8..=u8::MAX {
             let result = std::panic::catch_unwind(|| FourBlockSector::from_u8(i));
             assert!(result.is_err());
@@ -253,6 +253,7 @@ mod test {
 
     #[test]
     fn sixteen_block_sector_from_u8() {
+        #[cfg(feature = "std")]
         for i in u8::MIN..=31u8 {
             let result = std::panic::catch_unwind(|| SixteenBlockSector::from_u8(i));
             assert!(result.is_err());
@@ -263,14 +264,17 @@ mod test {
             assert_eq!(i, sector as u8);
         }
 
+        #[cfg(feature = "std")]
         for i in 40u8..=u8::MAX {
             let result = std::panic::catch_unwind(|| SixteenBlockSector::from_u8(i));
             assert!(result.is_err());
         }
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn sector_display() {
+        use std::format;
         for i in u8::MIN..=u8::MAX {
             if let Ok(sector) = Sector::try_from(i) {
                 let s = format!("{}", sector);

@@ -141,7 +141,6 @@ impl From<Sector> for Block {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::format;
 
     #[test]
     fn block_from_u8() {
@@ -157,8 +156,10 @@ mod test {
         }
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn block_format() {
+        use std::format;
         for i in 0u8..=u8::MAX {
             let b = Block::from(i);
             let s = format!("{}", b);
@@ -180,7 +181,7 @@ mod test {
         for i in 0u8..=31 {
             let s = FourBlockSector::try_from(i).unwrap();
             for j in 0u8..=4 {
-                let o = unsafe { std::mem::transmute(j) };
+                let o = unsafe { transmute(j) };
                 let b = Block::from_four_block_sector(s, o);
                 assert_eq!(i * 4 + j, b.0);
             }
@@ -201,7 +202,7 @@ mod test {
         for i in 32u8..=39 {
             let s = SixteenBlockSector::try_from(i).unwrap();
             for j in 0u8..=15 {
-                let o = unsafe { std::mem::transmute(j) };
+                let o = unsafe { transmute(j) };
                 let b = Block::from_sixteen_block_sector(s, o);
                 assert_eq!(((i - 32) * 16) + j + 128, b.0);
             }
@@ -222,14 +223,14 @@ mod test {
         assert_eq!(Block(128), convert16(SixteenBlockSector::S32));
 
         for i in 0u8..=31 {
-            let s = unsafe { std::mem::transmute(i) };
+            let s = unsafe { transmute(i) };
             let b = convert4(s);
             assert_eq!(i * 4, b.0);
             assert_eq!(Block(i * 4), b);
         }
 
         for i in 32u8..=39 {
-            let s = unsafe { std::mem::transmute(i) };
+            let s = unsafe { transmute(i) };
             let b = convert16(s);
             assert_eq!(((i - 32) * 16) + 128, b.0);
             assert_eq!(Block(((i - 32) * 16) + 128), b);
@@ -242,6 +243,7 @@ mod test {
             let block = FourBlockOffset::from_u8(i);
             assert_eq!(i, block as u8);
         }
+        #[cfg(feature = "std")]
         for i in 4u8..=u8::MAX {
             let result = std::panic::catch_unwind(|| FourBlockOffset::from_u8(i));
             assert!(result.is_err());
@@ -254,6 +256,7 @@ mod test {
             let block = SixteenBlockOffset::from_u8(i);
             assert_eq!(i, block as u8);
         }
+        #[cfg(feature = "std")]
         for i in 16u8..=u8::MAX {
             let result = std::panic::catch_unwind(|| SixteenBlockOffset::from_u8(i));
             assert!(result.is_err());
