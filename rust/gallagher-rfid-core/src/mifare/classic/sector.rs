@@ -311,7 +311,7 @@ mod test {
         for i in u8::MIN..=31u8 {
             let sector = Sector::from(FourBlockSector::from_u8(i));
             match sector {
-                Sector::FourBlock(s) => {
+                Sector::FourBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
                 _ => panic!("Expected four block sector"),
@@ -320,7 +320,7 @@ mod test {
         for i in 32u8..=39u8 {
             let sector = Sector::from(SixteenBlockSector::from_u8(i));
             match sector {
-                Sector::SixteenBlock(s) => {
+                Sector::SixteenBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
                 _ => panic!("Expected sixteen block sector"),
@@ -333,7 +333,7 @@ mod test {
         for i in u8::MIN..=31u8 {
             let sector = Sector::try_from(i).unwrap();
             match sector {
-                Sector::FourBlock(s) => {
+                Sector::FourBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
                 _ => panic!("Expected four block sector"),
@@ -342,7 +342,7 @@ mod test {
         for i in 32u8..=39u8 {
             let sector = Sector::try_from(i).unwrap();
             match sector {
-                Sector::SixteenBlock(s) => {
+                Sector::SixteenBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
                 _ => panic!("Expected sixteen block sector"),
