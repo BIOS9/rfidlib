@@ -3,6 +3,8 @@ mod sector;
 mod tag;
 
 pub use block::Block;
+pub use block::FourBlockOffset;
+pub use block::SixteenBlockOffset;
 pub use sector::FourBlockSector;
 pub use sector::Sector;
 pub use sector::Sector::*;

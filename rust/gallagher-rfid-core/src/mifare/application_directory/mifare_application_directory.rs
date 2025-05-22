@@ -1,10 +1,13 @@
-use crate::mifare::classic::{MifareClassic, MifareClassicKeyProvider};
+use crate::mifare::classic::{
+    sector::{FourBlockSector, MifareClassicSectorIndex4},
+    MifareClassic, MifareClassicError, MifareClassicKeyProvider, MifareClassicSector,
+};
 
 use super::{card_publisher_sector::CardPublisherSector, mad_application_id::MadAid};
 
 pub enum MadVersion {
     V1,
-    V2
+    V2,
 }
 
 pub struct MifareApplicationDirectory {
@@ -22,38 +25,46 @@ impl MifareApplicationDirectory {
     /// Default access bits for Mifare Application Directory (MAD) sectors.
     pub const MAD_ACCESS_BITS: [u8; 3] = [0x78, 0x77, 0x88];
 
-    pub fn create(
-        multi_application_card: bool,
-        mad_version: MadVersion,
-        card_publisher_sector: Option<CardPublisherSector>,
-        applications: &std::collections::BTreeMap<u8, MadAid>,
-    ) -> Result<Self, MadError> {
-        // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding
-        // sector 0 since that means the value is absent).
-        match mad_version {
-            MadVersion::V1 => {
-                if card_publisher_sector.into() >= 0x10 {
-                    return Err(MadError::InvalidCardPublisherSectorForMadV1(card_publisher_sector));
-                }
-            }
-            _ => {}
-        }
-        // e.g. check mad_version, card_publisher_sector validity, etc.
+    // pub fn create(
+    //     multi_application_card: bool,
+    //     mad_version: MadVersion,
+    //     card_publisher_sector: Option<CardPublisherSector>,
+    //     applications: &std::collections::BTreeMap<u8, MadAid>,
+    // ) -> Result<Self, MadError> {
+    //     // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding
+    //     // sector 0 since that means the value is absent).
+    //     match mad_version {
+    //         MadVersion::V1 => {
+    //             if card_publisher_sector.into() >= 0x10 {
+    //                 return Err(MadError::InvalidCardPublisherSectorForMadV1(
+    //                     card_publisher_sector,
+    //                 ));
+    //             }
+    //         }
+    //         _ => {}
+    //     }
+    //     // e.g. check mad_version, card_publisher_sector validity, etc.
 
-        // Build all applications with default FREE for missing entries...
+    //     // Build all applications with default FREE for missing entries...
 
-        Ok(Self {
-            multi_application_card,
-            mad_version,
-            card_publisher_sector,
-            applications: applications.clone(),
-        })
-    }
+    //     Ok(Self {
+    //         multi_application_card,
+    //         mad_version,
+    //         card_publisher_sector,
+    //         applications: applications.clone(),
+    //     })
+    // }
 
     pub fn read_from_tag<T: MifareClassic>(
         tag: &mut T,
         key_provider: &impl MifareClassicKeyProvider,
     ) -> Result<Self, MadError> {
+        // Sector 0 must be present and readable MADv1
+        let mad_v1_sector = FourBlockSector::S0;
+        key_provider.authenticate(tag, mad_v1_sector)?;
+
+        // let block3 = tag.read_block() // Block 3 contains the General Purpose Byte, Keys and access conditions.
+
         // Authenticate, read blocks, validate CRC, decode AIDs...
         todo!()
     }
@@ -73,5 +84,12 @@ impl MifareApplicationDirectory {
 }
 
 pub enum MadError {
-    InvalidCardPublisherSectorForMadV1(CardPublisherSector)
+    InvalidCardPublisherSectorForMadV1(CardPublisherSector),
+    CardError(MifareClassicError),
+}
+
+impl From<MifareClassicError> for MadError {
+    fn from(error: MifareClassicError) -> Self {
+        MadError::CardError(error)
+    }
 }
