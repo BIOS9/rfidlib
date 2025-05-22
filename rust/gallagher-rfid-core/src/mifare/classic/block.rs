@@ -1,6 +1,9 @@
-use core::fmt;
+use core::{fmt, mem::transmute};
 
-use super::sector::{FourBlockSector, Sector, Sector::*, SixteenBlockSector};
+use super::{
+    sector::{FourBlockSector, Sector, Sector::*, SixteenBlockSector},
+    Error,
+};
 
 /// Represents offset of blocks in a four block MIFARE Classic sector.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -10,6 +13,29 @@ pub enum FourBlockOffset {
     B1,
     B2,
     B3,
+}
+
+impl FourBlockOffset {
+    /// Converts a u8 block index into a `FourBlockOffset` enum variant.
+    ///
+    /// # Panics
+    /// This code will panic if `block` is greater than 3 because there are only four blocks in some MIFARE classic sectors.
+    fn from_u8(block: u8) -> Self {
+        assert!(block <= Self::B3 as u8);
+        unsafe { transmute(block) }
+    }
+}
+
+impl TryFrom<u8> for FourBlockOffset {
+    type Error = Error;
+
+    fn try_from(block: u8) -> Result<Self, Self::Error> {
+        match block {
+            // 0 to 3 (inclusive) are always valid block offsets for four block sectors.
+            0..=3 => Ok(FourBlockOffset::from_u8(block)),
+            _ => Err(Error::InvalidBlock(block)),
+        }
+    }
 }
 
 /// Represents offset of blocks in a sixteen block MIFARE Classic sector.
@@ -32,6 +58,29 @@ pub enum SixteenBlockOffset {
     B13,
     B14,
     B15,
+}
+
+impl SixteenBlockOffset {
+    /// Converts a u8 block index into a `SixteenBlockOffset` enum variant.
+    ///
+    /// # Panics
+    /// This code will panic if `block` is greater than 15 because there are only sixteen blocks in some MIFARE classic sectors.
+    fn from_u8(block: u8) -> Self {
+        assert!(block <= Self::B15 as u8);
+        unsafe { transmute(block) }
+    }
+}
+
+impl TryFrom<u8> for SixteenBlockOffset {
+    type Error = Error;
+
+    fn try_from(block: u8) -> Result<Self, Self::Error> {
+        match block {
+            // 0 to 15 (inclusive) are always valid block offsets for sixteen block sectors.
+            0..=15 => Ok(SixteenBlockOffset::from_u8(block)),
+            _ => Err(Error::InvalidBlock(block)),
+        }
+    }
 }
 
 /// Represents a valid MIFARE Classic block from 0 to 255.
@@ -96,14 +145,14 @@ mod test {
     use std::format;
 
     #[test]
-    fn from_u8() {
+    fn block_from_u8() {
         for i in 0u8..=u8::MAX {
             assert_eq!(i, Block::from(i).0);
         }
     }
 
     #[test]
-    fn to_u8() {
+    fn block_to_u8() {
         for i in 0u8..=u8::MAX {
             assert_eq!(i, u8::from(Block::from(i)));
         }
@@ -119,7 +168,7 @@ mod test {
     }
 
     #[test]
-    fn from_four_block_sector() {
+    fn block_from_four_block_sector() {
         assert_eq!(
             Block(0),
             Block::from_four_block_sector(FourBlockSector::S0, FourBlockOffset::B0)
@@ -140,7 +189,7 @@ mod test {
     }
 
     #[test]
-    fn from_sixteen_block_sector() {
+    fn block_from_sixteen_block_sector() {
         assert_eq!(
             Block(128),
             Block::from_sixteen_block_sector(SixteenBlockSector::S32, SixteenBlockOffset::B0)
@@ -161,7 +210,7 @@ mod test {
     }
 
     #[test]
-    fn from_sector() {
+    fn block_from_sector() {
         fn convert4(sector: FourBlockSector) -> Block {
             Block::from(Sector::from(sector))
         }
@@ -185,6 +234,54 @@ mod test {
             let b = convert16(s);
             assert_eq!(((i - 32) * 16) + 128, b.0);
             assert_eq!(Block(((i - 32) * 16) + 128), b);
+        }
+    }
+
+    #[test]
+    fn four_block_offset_from_u8_raw() {
+        for i in 0u8..=3u8 {
+            let block = FourBlockOffset::from_u8(i);
+            assert_eq!(i, block as u8);
+        }
+        for i in 4u8..=u8::MAX {
+            let result = std::panic::catch_unwind(|| FourBlockOffset::from_u8(i));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn sixteen_block_offset_from_u8_raw() {
+        for i in 0u8..=15u8 {
+            let block = SixteenBlockOffset::from_u8(i);
+            assert_eq!(i, block as u8);
+        }
+        for i in 16u8..=u8::MAX {
+            let result = std::panic::catch_unwind(|| SixteenBlockOffset::from_u8(i));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn four_block_offset_try_from_u8() {
+        for i in 0u8..=3u8 {
+            let block = FourBlockOffset::try_from(i).unwrap();
+            assert_eq!(i, block as u8);
+        }
+        for i in 4u8..=u8::MAX {
+            let result = FourBlockOffset::try_from(i);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn sixteen_block_offset_try_from_u8() {
+        for i in 0u8..=15u8 {
+            let block = SixteenBlockOffset::try_from(i).unwrap();
+            assert_eq!(i, block as u8);
+        }
+        for i in 16u8..=u8::MAX {
+            let result = SixteenBlockOffset::try_from(i);
+            assert!(result.is_err());
         }
     }
 }
