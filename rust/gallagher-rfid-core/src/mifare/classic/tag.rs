@@ -9,6 +9,9 @@ pub enum KeyType {
 
 /// Trait defining basic operations for interacting with MIFARE Classic tags.
 pub trait Tag {
+    // Default MIFARE Classic A and B sector key.
+    const DEFAULT_KEY: [u8; 6] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+
     /// Authenticate to a specific sector on the tag using Key A or B.
     fn authenticate(
         &mut self,
