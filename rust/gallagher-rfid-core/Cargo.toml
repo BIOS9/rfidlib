@@ -8,3 +8,4 @@ default = ["std"]
 std = []
 
 [dependencies]
+heapless = "0.8.0"

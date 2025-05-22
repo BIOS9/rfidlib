@@ -1,5 +1,3 @@
-use std::string::String;
-
 use crate::mifare::classic::{Block, Sector};
 
 /// Represents which MIFARE Classic key to use for authentication.
@@ -39,7 +37,10 @@ pub enum Error {
     InvalidBlock(u8),
 
     /// Low-level PCSC or transport error.
-    TransportError(String),
+    #[cfg(feature = "std")]
+    TransportError(std::string::String),
+    #[cfg(not(feature = "std"))]
+    TransportError(heapless::String<64>),
 }
 
 /// Trait for providing authentication to MIFARE Classic sectors.
