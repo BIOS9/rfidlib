@@ -1,8 +1,23 @@
-use gallagher_rfid_core::mifare::classic::{FourBlockOffset, FourBlockSector, KeyType, Tag};
+use gallagher_rfid_core::mifare::{
+    application_directory::MifareApplicationDirectory,
+    classic::{FourBlockOffset, FourBlockSector, KeyProvider, KeyType, Tag},
+};
 use gallagher_rfid_pcsc::{
     acr122u::{Acr122uCard, Acr122uReader},
     smart_card::{SmartCardContext, SmartCardReader},
 };
+
+struct SimpleKeyProvider {}
+impl KeyProvider for SimpleKeyProvider {
+    fn authenticate<T: Tag>(
+        &self,
+        tag: &mut T,
+        sector: gallagher_rfid_core::mifare::classic::Sector,
+    ) -> Result<(), gallagher_rfid_core::mifare::classic::Error> {
+        tag.authenticate(sector, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], KeyType::KeyA)
+    }
+}
+
 fn main() {
     let context = SmartCardContext::establish().unwrap();
     let readers: Vec<SmartCardReader> = context.get_readers().unwrap().collect();
@@ -27,17 +42,20 @@ fn main() {
     let mut acr122u_card = acr122u.connect_to_card().unwrap();
     acr122u_card.set_card_detect_beep(false).unwrap();
 
-    let sector = FourBlockSector::S1;
-    acr122u_card
-        .authenticate(sector.into(), Acr122uCard::DEFAULT_KEY, KeyType::KeyA)
+    let mad = MifareApplicationDirectory::read_from_tag(&mut acr122u_card, &SimpleKeyProvider {})
         .unwrap();
-    // acr122u_card.authenticate(0, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], MifareClassicKeyType::KeyA).unwrap();
-    let block: [u8; 16] = (0..16).collect::<Vec<u8>>().try_into().unwrap();
-    acr122u_card
-        .write_block(sector.block(FourBlockOffset::B0), block)
-        .unwrap();
-    let block = acr122u_card.read_block(sector.block(FourBlockOffset::B0));
-    println!("Block data: {:02X?}", block);
+
+    // let sector = FourBlockSector::S1;
+    // acr122u_card
+    //     .authenticate(sector.into(), Acr122uCard::DEFAULT_KEY, KeyType::KeyA)
+    //     .unwrap();
+    // // acr122u_card.authenticate(0, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], MifareClassicKeyType::KeyA).unwrap();
+    // let block: [u8; 16] = (0..16).collect::<Vec<u8>>().try_into().unwrap();
+    // acr122u_card
+    //     .write_block(sector.block(FourBlockOffset::B0), block)
+    //     .unwrap();
+    // let block = acr122u_card.read_block(sector.block(FourBlockOffset::B0));
+    // println!("Block data: {:02X?}", block);
     // acr122u_card.blink();
     // acr122u_card.blink();
     // acr122u_card.blink();
