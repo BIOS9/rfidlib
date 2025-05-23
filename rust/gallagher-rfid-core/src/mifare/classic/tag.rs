@@ -50,5 +50,5 @@ pub enum Error {
 ///
 /// Used to abstract how keys are retrieved and applied for authentication.
 pub trait KeyProvider {
-    fn authenticate<T: Tag>(&self, tag: T, sector: Sector) -> Result<(), Error>;
+    fn authenticate<T: Tag>(&self, tag: &mut T, sector: Sector) -> Result<(), Error>;
 }

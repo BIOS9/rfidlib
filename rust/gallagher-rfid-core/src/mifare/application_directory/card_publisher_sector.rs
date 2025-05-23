@@ -1,4 +1,4 @@
-use crate::mifare::classic::MifareClassicSector;
+use crate::mifare::classic::Sector;
 
 /// Mifare Application Directory (MAD) Card Publisher Sector (CPS) newtype validation wrapper.
 ///
@@ -6,16 +6,16 @@ use crate::mifare::classic::MifareClassicSector;
 /// - [Proxmark3 MAD implementation](https://github.com/RfidResearchGroup/proxmark3/blob/master/client/src/mifare/mad.c)
 /// - [NXP Application Note AN10787](https://www.nxp.com/docs/en/application-note/AN10787.pdf)
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct CardPublisherSector(MifareClassicSector);
+pub struct CardPublisherSector(Sector);
 
 impl CardPublisherSector {
     /// Constructs a `CardPublisherSector`, validating the input against known constraints.
-    /// 
+    ///
     /// Returns an error if:
     /// 1. The CPS cannot be 0x00, this sector is reserved for version 1 of the Mifare Application Directory (MAD).
     /// 2. The CPS cannot be 0x10, this sector is reserved for version 2 of the Mifare Application Directory (MAD).
     /// 3. The CPS cannot be greater than 0x27, because the highest sector in Mifare Classic is 39 (0x27).
-    pub fn new(sector: MifareClassicSector) -> Result<Self, CardPublisherSectorError> {
+    pub fn new(sector: Sector) -> Result<Self, CardPublisherSectorError> {
         match sector.into() {
             0x00 => Err(CardPublisherSectorError::ReservedForMadV1),
             0x10 => Err(CardPublisherSectorError::ReservedForMadV2),
@@ -25,21 +25,21 @@ impl CardPublisherSector {
     }
 }
 
-impl From<CardPublisherSector> for MifareClassicSector {
+impl From<CardPublisherSector> for Sector {
     fn from(value: CardPublisherSector) -> Self {
         value.0
-    }    
+    }
 }
 
 impl From<CardPublisherSector> for u8 {
     fn from(value: CardPublisherSector) -> Self {
         value.0.into()
-    }    
+    }
 }
 
 #[derive(Debug)]
 pub enum CardPublisherSectorError {
     ReservedForMadV1,
     ReservedForMadV2,
-    SectorOutOfRange(MifareClassicSector),
+    SectorOutOfRange(Sector),
 }
