@@ -1,9 +1,10 @@
-use core::iter;
-use std::{io::Read, println};
+use crate::mifare::application_directory::non_mad_sector::NonMadSector;
+use crate::mifare::classic::{
+    Error, FourBlockOffset, FourBlockSector, KeyProvider, Sector, SixteenBlockSector, Tag,
+};
+use heapless::LinearMap;
 
-use crate::mifare::classic::{Error, FourBlockOffset, FourBlockSector, KeyProvider, Sector, Tag};
-
-use super::{card_publisher_sector::CardPublisherSector, mad_application_id::MadAid};
+use super::mad_application_id::MadAid;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -24,51 +25,63 @@ impl TryFrom<u8> for MadVersion {
     }
 }
 
+/// Max possible number of Application IDs in MIFARE Application Directory.
+const MAX_AID_COUNT: usize = 38;
+
 pub struct MifareApplicationDirectory {
-    multi_application_card: bool,
-    mad_version: MadVersion,
-    card_publisher_sector: Option<CardPublisherSector>,
-    applications: std::collections::BTreeMap<u8, MadAid>,
+    pub multi_application_card: bool,
+    pub mad_version: MadVersion,
+    pub card_publisher_sector: Option<NonMadSector>,
+    applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT>,
 }
 
 impl MifareApplicationDirectory {
-    /// Default key A for Mifare Application Directory (MAD) sectors.
+    /// Default key A for MIFARE Application Directory (MAD) sectors.
     pub const MAD_KEY_A: [u8; 6] = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
-    /// Default key B for Mifare Application Directory (MAD) sectors.
+    /// Default key B for MIFARE Application Directory (MAD) sectors.
     pub const MAD_KEY_B: [u8; 6] = [0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5];
-    /// Default access bits for Mifare Application Directory (MAD) sectors.
+    /// Default access bits for MIFARE Application Directory (MAD) sectors.
     /// Key A read, Key B read/write all blocks.
     pub const MAD_ACCESS_BITS: [u8; 3] = [0x78, 0x77, 0x88];
 
-    // pub fn create(
-    //     multi_application_card: bool,
-    //     mad_version: MadVersion,
-    //     card_publisher_sector: Option<CardPublisherSector>,
-    //     applications: &std::collections::BTreeMap<u8, MadAid>,
-    // ) -> Result<Self, MadError> {
-    //     // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding
-    //     // sector 0 since that means the value is absent).
-    //     match mad_version {
-    //         MadVersion::V1 => {
-    //             if card_publisher_sector.into() >= 0x10 {
-    //                 return Err(MadError::InvalidCardPublisherSectorForMadV1(
-    //                     card_publisher_sector,
-    //                 ));
-    //             }
-    //         }
-    //         _ => {}
-    //     }
-    //     // e.g. check mad_version, card_publisher_sector validity, etc.
+    pub fn new(
+        multi_application_card: bool,
+        mad_version: MadVersion,
+        card_publisher_sector: Option<NonMadSector>,
+        applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT>,
+    ) -> Result<Self, MadError> {
+        // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding
+        // sector 0 since that means the value is absent).
+        if let Some(cps) = card_publisher_sector {
+            if mad_version == MadVersion::V1 && u8::from(cps) > 15 {
+                return Err(MadError::InvalidCardPublisherSectorForMadV1(cps.into()));
+            }
+        }
 
-    //     // Build all applications with default FREE for missing entries...
+        // The maximum sector which can contain an application.
+        let max_application_sector = if mad_version == MadVersion::V1 {
+            FourBlockSector::S15 as u8
+        } else {
+            SixteenBlockSector::S39 as u8
+        };
 
-    //     Ok(Self {
-    //         multi_application_card,
-    //         mad_version,
-    //         card_publisher_sector,
-    //         applications: applications.clone(),
-    //     })
-    // }
+        // Max sector 15 for MADv1, sector 39 for MADv2.
+        if mad_version == MadVersion::V1 {
+            if let Some((&sector, _)) = applications
+                .iter()
+                .find(|(&sector, _)| u8::from(sector) > max_application_sector)
+            {
+                return Err(MadError::InvalidApplicationSectorForMadV1(sector.into()));
+            }
+        }
+
+        Ok(Self {
+            multi_application_card,
+            mad_version,
+            card_publisher_sector,
+            applications,
+        })
+    }
 
     pub fn read_from_tag<T: Tag>(
         tag: &mut T,
@@ -102,32 +115,36 @@ impl MifareApplicationDirectory {
         let expected_crc_0 = block1[0]; // Expected CRC of sector 0 MAD data.
 
         // We have to drop the first byte of the MADv1 data since that is the expected CRC.
-        let mut mad_v1_data = [0u8; 32];
-        mad_v1_data[..16].copy_from_slice(&block1);
-        mad_v1_data[16..].copy_from_slice(&block2);
+        let mad_v1_data = {
+            let mut data = [0u8; 32];
+            data[..16].copy_from_slice(&block1);
+            data[16..].copy_from_slice(&block2);
+            data
+        };
+
         if crc8(mad_v1_data.iter().skip(1)) != expected_crc_0 {
             return Err(MadError::CrcMismatch);
         }
 
         // Decode info byte, if it's non-zero, set the Card Publisher Sector (CPS).
-        let sector0_info_byte = mad_v1_data[0] & 0b0011_1111;
-        let mut card_publisher_sector = if sector0_info_byte == 0 {
-            None
-        } else {
-            Some(sector0_info_byte)
-        };
+        let cps_data = mad_v1_data[0] & 0b0000_1111; // MADv1 CPS is only four bits since MIFARE Classic 1K only has 16 sectors.
+        let card_publisher_sector_v1 = Sector::try_from(cps_data)
+            .ok()
+            .and_then(|sec| NonMadSector::try_from(sec).ok());
 
         // Parse AIDs for MADv1.
-        // let sector0_aids: BTreeMap<FourBlockSector, MadAid> = mad_v1_data[1..] // Skip the info byte.
-        //     .chunks(2)
-        //     .enumerate()
-        //     .map(|(i, chunk)| {
-        //         let aid = MadAid::from_raw(chunk[1], chunk[0]);
-        //         ((i + 1) as u8, aid)
-        //     })
-        //     .collect();
+        let mad_v1_aids = mad_v1_data[1..] // Skip the info byte.
+            .chunks(2)
+            .enumerate()
+            .filter_map(|(i, chunk)| {
+                let arr: [u8; 2] = chunk.try_into().ok()?;
+                let aid = MadAid::from(&arr);
+                let sector = Sector::try_from(i as u8 + 1).ok()?;
+                let non_mad_sector = NonMadSector::try_from(sector).ok()?;
+                Some((non_mad_sector, aid))
+            });
 
-        // if MADv2 is present, decode that too.
+        // If MADv2 is present, decode that too.
         // MADv2 is just extra data on top of MADv1.
         if mad_version == MadVersion::V2 {
             // Sector 16 contains the MADv2.
@@ -139,9 +156,12 @@ impl MifareApplicationDirectory {
             let block1 = tag.read_block(mad_v2_sector.block(FourBlockOffset::B1))?;
             let block2 = tag.read_block(mad_v2_sector.block(FourBlockOffset::B2))?;
 
-            let mut mad_v2_data = [0u8; 32];
-            mad_v2_data[..16].copy_from_slice(&block1);
-            mad_v2_data[16..].copy_from_slice(&block2);
+            let mad_v2_data = {
+                let mut data = [0u8; 32];
+                data[..16].copy_from_slice(&block1);
+                data[16..].copy_from_slice(&block2);
+                data
+            };
 
             // CRC calculation for MADv2 sector 16.
             let expected_crc16 = block0[0]; // First byte in sector 16 is the CRC. Skip it for CRC input too.
@@ -149,43 +169,44 @@ impl MifareApplicationDirectory {
                 return Err(MadError::CrcMismatch);
             }
 
-            // Use the MADv2 CPS if it's present and non-zero.
-            let sector16_info_byte = mad_v2_data[0] & 0b0011_1111; // Bits 6 and 7 of info byte are reserved, so ignore.
-            if sector16_info_byte != 0 {
-                card_publisher_sector = Some(sector16_info_byte);
-            }
+            // Decode MADv2 info byte, if it's non-zero, set the Card Publisher Sector (CPS).
+            let cps_data = mad_v2_data[0] & 0b0011_1111; // MADv2 is 6 bits. Bits 6 and 7 of info byte are reserved, so ignore.
+                                                         // Try to decode CPS, if it's invalid, just ignore it, we can continue anyway.
+            let card_publisher_sector = Sector::try_from(cps_data)
+                .ok()
+                .and_then(|sec| NonMadSector::try_from(sec).ok())
+                .or(card_publisher_sector_v1);
 
-            // let sector16_aids: BTreeMap<u8, MadAid> = mad_v2_data[1..] // Skip info byte.
-            //     .chunks(2)
-            //     .enumerate()
-            //     .map(|(i, chunk)| {
-            //         let aid = MadAid::from_raw(chunk[1], chunk[0]);
-            //         ((i + 17) as u8, aid)
-            //     })
-            //     .collect();
+            let mad_v2_aids = mad_v2_data[1..] // Skip the info byte.
+                .chunks(2)
+                .enumerate()
+                .filter_map(|(i, chunk)| {
+                    let arr: [u8; 2] = chunk.try_into().ok()?;
+                    let aid = MadAid::from(&arr);
+                    let sector = Sector::try_from(i as u8 + 17).ok()?;
+                    let non_mad_sector = NonMadSector::try_from(sector).ok()?;
+                    Some((non_mad_sector, aid))
+                });
 
-            // let mut all_aids = sector0_aids;
-            // all_aids.extend(sector16_aids);
+            let all_aids: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT> = mad_v1_aids
+                .into_iter()
+                .chain(mad_v2_aids.into_iter())
+                .collect();
 
-            // When MADv2, concatenate AIDs from MADv1 sector0 and MADv2 sector16
-            // return create(
-            //     multi_application_card,
-            //     mad_version,
-            //     card_publisher_sector,
-            //     all_aids,
-            // );
-            println!("Valid MADv2!");
-            todo!();
+            Self::new(
+                multi_application_card,
+                mad_version,
+                card_publisher_sector,
+                all_aids,
+            )
+        } else {
+            Self::new(
+                multi_application_card,
+                mad_version,
+                card_publisher_sector_v1,
+                mad_v1_aids.into_iter().collect(),
+            )
         }
-
-        // create(
-        //     multi_application_card,
-        //     mad_version,
-        //     card_publisher_sector,
-        //     sector0_aids,
-        // )
-        println!("Valid MADv1!");
-        todo!();
     }
 
     pub fn write_to_tag<T: Tag>(
@@ -207,7 +228,8 @@ pub enum MadError {
     NotPersonalized,
     MadMissing,
     InvalidMadVersion(u8),
-    InvalidCardPublisherSectorForMadV1(CardPublisherSector),
+    InvalidCardPublisherSectorForMadV1(Sector),
+    InvalidApplicationSectorForMadV1(Sector),
     CrcMismatch,
     TagError(Error),
 }
