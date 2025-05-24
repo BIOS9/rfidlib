@@ -1,7 +1,7 @@
 use crate::mifare::classic::{Block, Sector};
 
 /// Represents which MIFARE Classic key to use for authentication.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum KeyType {
     KeyA,
     KeyB,
@@ -16,7 +16,7 @@ pub trait Tag {
     fn authenticate(
         &mut self,
         sector: Sector,
-        key: [u8; 6],
+        key: &[u8; 6],
         key_type: KeyType,
     ) -> Result<(), Error>;
 
