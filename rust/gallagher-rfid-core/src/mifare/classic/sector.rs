@@ -46,6 +46,11 @@ impl FourBlockSector {
         Block::from_four_block_sector(*self, offset)
     }
 
+    /// Iterate every FourBlockSector from S0 to S31 (inclusive).
+    pub fn iter() -> impl Iterator<Item = FourBlockSector> {
+        (0u8..=31).filter_map(|s| FourBlockSector::try_from(s).ok())
+    }
+
     /// Converts a u8 sector index into a `FourBlockSector` enum variant.
     ///
     /// # Panics
@@ -90,6 +95,11 @@ impl SixteenBlockSector {
         Block::from_sixteen_block_sector(*self, offset)
     }
 
+    /// Iterate every SixteenBlockSector from S32 to S39 (inclusive).
+    pub fn iter() -> impl Iterator<Item = SixteenBlockSector> {
+        (32u8..=39).filter_map(|s| SixteenBlockSector::try_from(s).ok())
+    }
+
     /// Converts a u8 sector index into a `FourBlockSector` enum variant.
     ///
     /// # Panics
@@ -120,6 +130,17 @@ impl TryFrom<u8> for SixteenBlockSector {
 pub enum Sector {
     FourBlock(FourBlockSector),       // 0..=31
     SixteenBlock(SixteenBlockSector), // 32..=39
+}
+
+impl Sector {
+    /// Iterate all sectors in order:
+    ///   FourBlock(S1) to FourBlock(S31),
+    ///   then SixteenBlock(S32) to SixteenBlock(S39).
+    pub fn iter() -> impl Iterator<Item = Sector> {
+        FourBlockSector::iter()
+            .map(Sector::FourBlock)
+            .chain(SixteenBlockSector::iter().map(Sector::SixteenBlock))
+    }
 }
 
 impl fmt::Display for Sector {
@@ -176,7 +197,7 @@ impl From<Block> for Sector {
         // Unsafe saves matching every individual enum variant.
         match block {
             0..=127 => FourBlockSector::from_u8(block / 4).into(),
-            128..=255 => SixteenBlockSector::from_u8(((block - 128) / 16) + 32).into(),
+            _ => SixteenBlockSector::from_u8(((block - 128) / 16) + 32).into(),
         }
     }
 }
@@ -184,6 +205,7 @@ impl From<Block> for Sector {
 #[cfg(test)]
 mod test {
     use super::*;
+    use heapless::Vec;
 
     #[test]
     fn four_block_sector_try_from_u8() {
@@ -378,5 +400,35 @@ mod test {
                 _ => panic!("Expected sixteen block sector"),
             }
         }
+    }
+
+    #[test]
+    fn four_block_sector_iterates_all() {
+        let all: Vec<u8, 32> = FourBlockSector::iter().map(|s| s as u8).collect();
+        assert_eq!(all.len(), 32);
+        assert_eq!(all, (0u8..=31).collect::<Vec<u8, 32>>());
+    }
+
+    #[test]
+    fn sixteen_block_sector_iterates_all() {
+        let all: Vec<u8, 8> = SixteenBlockSector::iter().map(|s| s as u8).collect();
+        assert_eq!(all.len(), 8);
+        assert_eq!(all, (32u8..=39).collect::<Vec<u8, 8>>());
+    }
+
+    #[test]
+    fn sector_iterates_all() {
+        let all: Vec<u8, 40> = Sector::iter()
+            .map(|sector| match sector {
+                Sector::FourBlock(f) => f as u8,
+                Sector::SixteenBlock(s) => s as u8,
+            })
+            .collect();
+
+        let mut expected = (1u8..=31).filter(|&s| s != 16).collect::<Vec<u8, 40>>();
+        expected.extend(32u8..=39);
+
+        assert_eq!(all.len(), 40);
+        assert_eq!(all, (0u8..=39).collect::<Vec<u8, 40>>());
     }
 }
