@@ -1,4 +1,4 @@
-mod card_publisher_sector;
+mod non_mad_sector;
 mod mad_application_id;
 mod mifare_application_directory;
 
