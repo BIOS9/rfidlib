@@ -28,6 +28,7 @@ impl TryFrom<u8> for MadVersion {
 /// Max possible number of Application IDs in MIFARE Application Directory.
 const MAX_AID_COUNT: usize = 38;
 
+#[derive(Debug)]
 pub struct MifareApplicationDirectory {
     pub multi_application_card: bool,
     pub mad_version: MadVersion,
@@ -95,10 +96,15 @@ impl MifareApplicationDirectory {
         let block3 = tag.read_block(mad_v1_sector.block(FourBlockOffset::B3))?;
         let general_purpose_byte: u8 = block3[9];
 
-        match general_purpose_byte {
-            0x69 => return Err(MadError::NotPersonalized),
-            0x80 => return Err(MadError::MadMissing),
-            _ => {}
+        // A GPB value of 0x96 indicates the MIFARE card has not been personalized and thus the MAD is
+        // invalid.
+        if general_purpose_byte == 0x69 {
+            return Err(MadError::NotPersonalized);
+        }
+
+        // The DA bit of the GPB specifies if MAD is present.
+        if general_purpose_byte & 0b10000000 == 0 {
+            return Err(MadError::MadMissing);
         }
 
         // The MA bit of the GBP specifies if the card is multi-application or single-application.
@@ -127,10 +133,14 @@ impl MifareApplicationDirectory {
         }
 
         // Decode info byte, if it's non-zero, set the Card Publisher Sector (CPS).
-        let cps_data = mad_v1_data[0] & 0b0000_1111; // MADv1 CPS is only four bits since MIFARE Classic 1K only has 16 sectors.
-        let card_publisher_sector_v1 = Sector::try_from(cps_data)
-            .ok()
-            .and_then(|sec| NonMadSector::try_from(sec).ok());
+        let cps_data = mad_v1_data[1] & 0b0000_1111; // MADv1 CPS is only four bits since MIFARE Classic 1K only has 16 sectors.
+        let card_publisher_sector_v1 = if cps_data == 0 {
+            None
+        } else {
+            let sector =
+                Sector::try_from(cps_data).map_err(|_| MadError::InvalidCardPublisherSector)?;
+            Some(NonMadSector::try_from(sector).map_err(|_| MadError::InvalidCardPublisherSector)?)
+        };
 
         // Parse card applications for MADv1.
         let mut applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT> = LinearMap::new();
@@ -176,7 +186,7 @@ impl MifareApplicationDirectory {
                 let mut data = [0u8; 48];
                 data[..16].copy_from_slice(&block0);
                 data[16..32].copy_from_slice(&block1);
-                data[48..].copy_from_slice(&block2);
+                data[32..].copy_from_slice(&block2);
                 data
             };
 
@@ -188,10 +198,16 @@ impl MifareApplicationDirectory {
 
             // Decode MADv2 info byte, if it's non-zero, set the Card Publisher Sector (CPS).
             let cps_data = mad_v2_data[1] & 0b0011_1111; // MADv2 is 6 bits. Bits 6 and 7 of info byte are reserved, so ignore.
-            let card_publisher_sector = Sector::try_from(cps_data) // Try to decode CPS, if it's invalid, just ignore it, we can continue anyway.
-                .ok()
-                .and_then(|sec| NonMadSector::try_from(sec).ok())
-                .or(card_publisher_sector_v1);
+            let card_publisher_sector = if cps_data == 0 {
+                card_publisher_sector_v1
+            } else {
+                let sector =
+                    Sector::try_from(cps_data).map_err(|_| MadError::InvalidCardPublisherSector)?;
+                Some(
+                    NonMadSector::try_from(sector)
+                        .map_err(|_| MadError::InvalidCardPublisherSector)?,
+                )
+            };
 
             // Parse MADv2 applications.
             // Skip the CRC and info byte, and break into 2 byte chunks.
@@ -249,6 +265,7 @@ pub enum MadError {
     MadMissing,
     InvalidMadVersion(u8),
     InvalidCardPublisherSectorForMadV1(Sector),
+    InvalidCardPublisherSector,
     InvalidApplicationSectorForMadV1(Sector),
     InvalidApplication(MadAidError),
     InvalidApplicationSector(Sector),
@@ -288,14 +305,15 @@ fn crc8<'a>(data: impl Iterator<Item = &'a u8>) -> u8 {
 #[cfg(test)]
 mod test {
     use crate::mifare::application_directory::mifare_application_directory::crc8;
-    use crate::mifare::application_directory::{MadVersion, MifareApplicationDirectory};
+    use crate::mifare::application_directory::{MadError, MadVersion, MifareApplicationDirectory};
     use crate::mifare::classic::{
         Block, Error, FourBlockSector, KeyProvider, KeyType, Sector, Tag,
     };
+    use std::fmt::Debug;
 
     struct MockClassic1k<'a> {
         key: &'a [u8; 6],
-        sector0: &'a [u8; 64],
+        sector0: [u8; 64],
     }
 
     impl<'a> Tag for MockClassic1k<'a> {
@@ -330,6 +348,51 @@ mod test {
         }
     }
 
+    struct MockClassic4k<'a> {
+        key: &'a [u8; 6],
+        sector0: [u8; 64],
+        sector16: [u8; 64],
+    }
+
+    impl<'a> Tag for MockClassic4k<'a> {
+        fn authenticate(
+            &mut self,
+            sector: Sector,
+            key: &[u8; 6],
+            key_type: KeyType,
+        ) -> Result<(), Error> {
+            if !key.eq(self.key) && key_type == KeyType::KeyA {
+                panic!("Unexpected key");
+            }
+
+            match sector {
+                Sector::FourBlock(FourBlockSector::S0) => Ok(()),
+                Sector::FourBlock(FourBlockSector::S16) => Ok(()),
+                _ => panic!("Unexpected sector"),
+            }
+        }
+
+        fn read_block(&mut self, block: Block) -> Result<[u8; 16], Error> {
+            let mut out = [0u8; 16];
+            match u8::from(block) {
+                0 => out.copy_from_slice(&self.sector0[0..16]),
+                1 => out.copy_from_slice(&self.sector0[16..32]),
+                2 => out.copy_from_slice(&self.sector0[32..48]),
+                3 => out.copy_from_slice(&self.sector0[48..64]),
+                64 => out.copy_from_slice(&self.sector16[0..16]),
+                65 => out.copy_from_slice(&self.sector16[16..32]),
+                66 => out.copy_from_slice(&self.sector16[32..48]),
+                67 => out.copy_from_slice(&self.sector16[48..64]),
+                _ => panic!("Unexpected block read"),
+            };
+            Ok(out)
+        }
+
+        fn write_block(&mut self, _: Block, _: [u8; 16]) -> Result<(), Error> {
+            panic!("Unexpected write");
+        }
+    }
+
     struct MockKeyProvider<'a> {
         key_type: KeyType,
         key: &'a [u8; 6],
@@ -344,22 +407,67 @@ mod test {
     const TEST_MAD_A_KEY: &[u8; 6] = b"\xA0\xA1\xA2\xA3\xA4\xA5";
     const TEST_MAD_B_KEY: &[u8; 6] = b"\xB0\xB1\xB2\xB3\xB4\xB5";
     const VALID_SECTOR_0: &[u8; 64] = b"\x9D\x49\x91\x16\xDE\x28\x02\x00\xE3\x27\x00\x20\x00\x00\x00\x17\xCD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x48\x12\x48\x00\x00\x00\x00\x00\x00\x78\x77\x88\xC1\x00\x00\x00\x00\x00\x00";
+    const VALID_SECTOR_16: &[u8; 64] = b"\xD2\x00\x11\xEE\x12\xED\x13\xEC\x14\xEB\x15\xEA\x16\xE9\x17\xE8\x18\xE7\x19\xE6\x1A\xE5\x1B\xE4\x1C\xE3\x1D\xE2\x1E\xE1\x1F\xE0\x20\xDF\x21\xDE\x22\xDD\x23\xDC\x24\xDB\x25\xDA\x26\xD9\x27\xD8\x00\x00\x00\x00\x00\x00\x78\x77\x88\xC2\x00\x00\x00\x00\x00\x00";
 
     const DEFAULT_READ_KEY_PROVIDER: MockKeyProvider = MockKeyProvider {
         key_type: KeyType::KeyA,
         key: TEST_MAD_A_KEY,
     };
+
+    trait SectorHelpers {
+        fn replace_index(&self, index: usize, value: u8) -> Self;
+        fn recalculate_v1_crc(&self) -> [u8; 64];
+        fn recalculate_v2_crc(&self) -> [u8; 64];
+        fn to_mad_v2(&self) -> [u8; 64];
+        fn mock_1k(self) -> impl Tag;
+        fn mock_4k(self, sector16: Self) -> impl Tag;
+    }
+
+    impl SectorHelpers for [u8; 64] {
+        fn replace_index(&self, index: usize, value: u8) -> [u8; 64] {
+            let mut arr = *self;
+            arr[index] = value;
+            arr
+        }
+
+        fn recalculate_v1_crc(&self) -> [u8; 64] {
+            let crc = crc8(self[17..=47].iter());
+            self.replace_index(16, crc)
+        }
+
+        fn recalculate_v2_crc(&self) -> [u8; 64] {
+            let crc = crc8(self[1..=47].iter());
+            self.replace_index(0, crc)
+        }
+
+        fn to_mad_v2(&self) -> [u8; 64] {
+            if self[57] != 0xC1 {
+                panic!("Expected MADv1 sector");
+            }
+            self.replace_index(57, 0xC2)
+        }
+
+        fn mock_1k(self) -> impl Tag {
+            MockClassic1k {
+                key: TEST_MAD_A_KEY,
+                sector0: self,
+            }
+        }
+
+        fn mock_4k(self, sector16: Self) -> impl Tag {
+            MockClassic4k {
+                key: TEST_MAD_A_KEY,
+                sector0: self,
+                sector16,
+            }
+        }
+    }
+
     //   private val validSector0MoreAids =
     //       ("9D 49 91 16 DE 28 02 00 E3 27 00 20 00 00 00 17" +
     //               "23 00 01 FE 02 FD 03 FC 04 FB 05 FA 06 F9 07 F8" +
     //               "08 F7 09 F6 0A F5 0B F4 0C F3 0D F2 0E F1 0F F0" +
     //               "00 00 00 00 00 00 78 77 88 C1 00 00 00 00 00 00")
-    //           .hexToUByteArray()
-    //   private val validSector16 =
-    //       ("D2 00 11 EE 12 ED 13 EC 14 EB 15 EA 16 E9 17 E8" +
-    //               "18 E7 19 E6 1A E5 1B E4 1C E3 1D E2 1E E1 1F E0" +
-    //               "20 DF 21 DE 22 DD 23 DC 24 DB 25 DA 26 D9 27 D8" +
-    //               "00 00 00 00 00 00 78 77 88 C2 00 00 00 00 00 00")
     //           .hexToUByteArray()
 
     #[test]
@@ -395,370 +503,220 @@ mod test {
 
     #[test]
     fn valid_mad_v1() {
-        let mut tag = MockClassic1k {
-            key: TEST_MAD_A_KEY,
-            sector0: VALID_SECTOR_0,
-        };
+        let mut tag = VALID_SECTOR_0.mock_1k();
         let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
             .unwrap();
         assert_eq!(MadVersion::V1, mad.mad_version)
     }
 
-    //   /** Replaces byte at index in array with specified value. */
-    //   private fun UByteArray.replaceIndex(index: Int, newValue: UByte): UByteArray =
-    //       this.mapIndexed { i, oldValue -> if (index == i) newValue else oldValue }.toUByteArray()
+    #[test]
+    fn unpersonalized_card() {
+        // When GPB is 0x69 it indicates an unpersonalized card.
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0x69).mock_1k();
+
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::NotPersonalized) => {}
+            _ => panic!("Expected not personalized error"),
+        }
+    }
+
+    #[test]
+    fn mad_not_present() {
+        // First bit of GPB is the DA bit.
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0b01000001).mock_1k();
+
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::MadMissing) => {}
+            _ => panic!("Expected MAD missing error"),
+        }
+    }
+
+    #[test]
+    fn multi_application_bit_read() {
+        // Second bit of GPB is the MA bit.
+        // Check multi-application.
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0b11000001).mock_1k();
+
+        let ma_mad =
+            MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+                .unwrap();
+        assert!(ma_mad.multi_application_card);
+
+        // Check single-application.
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0b10000001).mock_1k();
+
+        let sa_mad =
+            MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+                .unwrap();
+        assert!(!sa_mad.multi_application_card);
+    }
+
+    #[test]
+    fn invalid_mad_version() {
+        // Final two bits of GPB is the MAD version which must be 1 or 2.
+        // Check version 0.
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0b11000000).mock_1k();
+
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::InvalidMadVersion(version)) => {
+                assert_eq!(version, 0);
+            }
+            _ => panic!("Expected MAD version error"),
+        }
+
+        // Check version 3
+        let mut tag = VALID_SECTOR_0.replace_index(57, 0b11000011).mock_1k();
+
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::InvalidMadVersion(version)) => {
+                assert_eq!(version, 3);
+            }
+            _ => panic!("Expected MAD version error"),
+        }
+    }
+
+    #[test]
+    fn invalid_mad_v1_crc() {
+        // 17th byte in sector 0 is CRC.
+        let mut tag = VALID_SECTOR_0.replace_index(16, 0).mock_1k();
+
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::CrcMismatch) => {}
+            _ => panic!("Expected MAD CRC error"),
+        }
+    }
+
+    #[test]
+    fn mad_v1_card_publisher_sector() {
+        // 18th byte in sector 0 is the info byte which contains the CPS pointer.
+        // CRC must be recalculated when modifying info byte 17.
+        let mut tag = VALID_SECTOR_0
+            .replace_index(17, 0)
+            .recalculate_v1_crc()
+            .mock_1k();
+
+        // Check missing CPS.
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+        assert!(mad.card_publisher_sector.is_none());
+
+        // Check other CPS values
+        for cps in 0x01u8..=0x0F {
+            let mut tag = VALID_SECTOR_0
+                .replace_index(17, cps)
+                .recalculate_v1_crc()
+                .mock_1k();
+
+            let mad =
+                MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+                    .unwrap();
+            assert_eq!(cps, mad.card_publisher_sector.unwrap().into());
+        }
+    }
+
+    #[test]
+    fn invalid_mad_v1_card_publisher_sector() {
+        // CPS cannot point to sector 0x10 since that's reserved for MADv2.
+        let mut tag = VALID_SECTOR_0
+            .replace_index(17, 0x10)
+            .recalculate_v1_crc()
+            .mock_1k();
+
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+        assert_eq!(None, mad.card_publisher_sector); // This should be none because 0x10 is 0 when masked with 0b1111 for MADv1.
+
+        // Mad V1 CPS cannot exceed 15, but it should never error because 0b1111 cannot be more than 15.
+        for info in 0x10..=0x3F {
+            let mut tag = VALID_SECTOR_0
+                .replace_index(17, info)
+                .recalculate_v1_crc()
+                .mock_1k();
+
+            _ = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn valid_mad_v2() {
+        let mut tag = VALID_SECTOR_0.to_mad_v2().mock_4k(*VALID_SECTOR_16);
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+        assert_eq!(MadVersion::V2, mad.mad_version);
+    }
+
+    #[test]
+    fn invalid_mad_v2_crc() {
+        // Replace CRC with 0 for MADv2 sector.
+        let mut tag = VALID_SECTOR_0
+            .to_mad_v2()
+            .mock_4k(VALID_SECTOR_16.replace_index(0, 0));
+        match MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER) {
+            Err(MadError::CrcMismatch) => {}
+            _ => panic!("Expected MAD CRC error"),
+        }
+    }
+
+    #[test]
+    fn valid_mad_v2_cps() {
+        // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
+        let mut tag = VALID_SECTOR_0
+            .to_mad_v2()
+            .mock_4k(VALID_SECTOR_16.replace_index(1, 0).recalculate_v2_crc());
+
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+        assert!(mad.card_publisher_sector.is_none());
+
+        for cps in 0x01..=0x027 {
+            // Skip MADv2 sector.
+            if (cps == 0x10) {
+                continue;
+            }
+
+            let mut tag = VALID_SECTOR_0
+                .to_mad_v2()
+                .mock_4k(VALID_SECTOR_16.replace_index(1, cps).recalculate_v2_crc());
+            let mad =
+                MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+                    .unwrap();
+
+            assert_eq!(cps, mad.card_publisher_sector.unwrap().into());
+        }
+    }
+
+    #[test]
+    fn invalid_mad_v2_cps() {
+        // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
+
+        // CPS cannot point at MAD v2 sector 16 (0x10).
+        let mut tag = VALID_SECTOR_0
+            .to_mad_v2()
+            .mock_4k(VALID_SECTOR_16.replace_index(1, 0x10).recalculate_v2_crc());
+
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER);
+        match mad {
+            Err(MadError::InvalidCardPublisherSector) => {}
+            _ => panic!("Expected invalid CPS error"),
+        }
+
+        // CPS pointer cannot exceed sector 39.
+        for info in 0x28..=0x3F {
+            let mut tag = VALID_SECTOR_0
+                .to_mad_v2()
+                .mock_4k(VALID_SECTOR_16.replace_index(1, info).recalculate_v2_crc());
+
+            let mad =
+                MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER);
+            match mad {
+                Err(MadError::InvalidCardPublisherSector) => {}
+                _ => panic!("Expected invalid CPS error1"),
+            }
+        }
+    }
     //
-    //   /** Recalculates and replaces CRC value for MAD v1 sector. */
-    //   private fun UByteArray.recalculateMadV1Crc(): UByteArray {
-    //     require(this.size == 64)
-    //     return this.replaceIndex(16, Crc8Mad.compute(this.sliceArray(17..47)))
-    //   }
-    //
-    //   /** Recalculates and replaces CRC value for MAD v2 sector. */
-    //   private fun UByteArray.recalculateMadV2Crc(): UByteArray {
-    //     require(this.size == 64)
-    //     return this.replaceIndex(0, Crc8Mad.compute(this.sliceArray(1..47)))
-    //   }
-    //
-    //   /** Converts MADv1 sector into MADv2 sector by changing version bits. */
-    //   private fun UByteArray.makeMadV2(): UByteArray {
-    //     require(this.size == 64)
-    //     require(this[57] == 0xC1u.toUByte())
-    //     return this.replaceIndex(57, 0xC2u)
-    //   }
-    //
-    //   private fun mockClassic1k(sector0: UByteArray): MifareClassic {
-    //     val tag = mockk<MifareClassic>()
-    //     every { tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA) } just runs
-    //     every { tag.readBlock(0) } returns sector0.sliceArray(0..15)
-    //     every { tag.readBlock(1) } returns sector0.sliceArray(16..31)
-    //     every { tag.readBlock(2) } returns sector0.sliceArray(32..47)
-    //     every { tag.readBlock(3) } returns sector0.sliceArray(48..63)
-    //
-    //     return tag
-    //   }
-    //
-    //   private fun mockClassic4k(sector0: UByteArray, sector16: UByteArray): MifareClassic {
-    //     val tag = mockk<MifareClassic>()
-    //     every { tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA) } just runs
-    //     every { tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA) } just runs
-    //     every { tag.readBlock(0) } returns sector0.sliceArray(0..15)
-    //     every { tag.readBlock(1) } returns sector0.sliceArray(16..31)
-    //     every { tag.readBlock(2) } returns sector0.sliceArray(32..47)
-    //     every { tag.readBlock(3) } returns sector0.sliceArray(48..63)
-    //     every { tag.readBlock(64) } returns sector16.sliceArray(0..15)
-    //     every { tag.readBlock(65) } returns sector16.sliceArray(16..31)
-    //     every { tag.readBlock(66) } returns sector16.sliceArray(32..47)
-    //     every { tag.readBlock(67) } returns sector16.sliceArray(48..63)
-    //
-    //     return tag
-    //   }
-    //
-    //   @Test
-    //   fun `unpersonalized card should fail`() {
-    //     // When GPB is 0x69 it indicates an unpersonalized card.
-    //     val tag = mockClassic1k(validSector0.replaceIndex(57, 0x69u))
-    //     assertFailsWith<NotPersonalizedException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3) // Should start by reading block 3 to get GPB.
-    //     }
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   @Test
-    //   fun `false mad DA bit should fail`() {
-    //     // First bit of GPB is the DA bit.
-    //     val tag = mockClassic1k(validSector0.replaceIndex(57, 0b01000001u))
-    //     assertFailsWith<MadNotFoundException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3) // Should start by reading block 3 to get GPB.
-    //     }
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   @Test
-    //   fun `multi-application bit should be read`() {
-    //     // Second bit of GPB is the MA bit.
-    //     // Check multi-application.
-    //     val maTag = mockClassic1k(validSector0.replaceIndex(57, 0b11000001u))
-    //     assertTrue(
-    //         MifareApplicationDirectory.readFromMifareClassic(maTag, defaultReadKeyProvider)
-    //             .multiApplicationCard,
-    //         "Expected multi-application card")
-    //
-    //     verifySequence {
-    //       maTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       maTag.readBlock(3)
-    //       maTag.readBlock(1)
-    //       maTag.readBlock(2)
-    //     }
-    //     confirmVerified(maTag)
-    //
-    //     // Check single-application.
-    //     val saTag = mockClassic1k(validSector0.replaceIndex(57, 0b10000001u))
-    //     assertFalse(
-    //         MifareApplicationDirectory.readFromMifareClassic(saTag, defaultReadKeyProvider)
-    //             .multiApplicationCard,
-    //         "Expected single-application card")
-    //
-    //     verifySequence {
-    //       saTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       saTag.readBlock(3)
-    //       saTag.readBlock(1)
-    //       saTag.readBlock(2)
-    //     }
-    //     confirmVerified(saTag)
-    //   }
-    //
-    //   @Test
-    //   fun `invalid mad version should fail`() {
-    //     // Final two bits of GPB is the MAD version which must be 1 or 2.
-    //     val tag1 = mockClassic1k(validSector0.replaceIndex(57, 0b11000000u))
-    //     assertFailsWith<InvalidMadVersionException> {
-    //       // 0b00 MAD version bits.
-    //       MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag1.readBlock(3)
-    //     }
-    //     confirmVerified(tag1)
-    //
-    //     val tag2 = mockClassic1k(validSector0.replaceIndex(57, 0b11000011u))
-    //     assertFailsWith<InvalidMadVersionException> {
-    //       // 0b11 MAD version bits.
-    //       MifareApplicationDirectory.readFromMifareClassic(tag2, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag2.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag2.readBlock(3)
-    //     }
-    //     confirmVerified(tag1)
-    //   }
-    //
-    //   @Test
-    //   fun `invalid mad v1 crc should fail`() {
-    //     // 17th byte in sector 0 is CRC.
-    //     val tag = mockClassic1k(validSector0.replaceIndex(16, 0u))
-    //     assertFailsWith<InvalidMadCrcException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //     }
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   @Test
-    //   fun `check card publisher sector`() {
-    //     // 18th byte in sector 0 is the info byte which contains the CPS pointer.
-    //     // CRC must be recalculated when modifying info byte 17.
-    //
-    //     val nullCpsTag = mockClassic1k(validSector0.replaceIndex(17, 0u).recalculateMadV1Crc())
-    //     assertNull(
-    //         MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultReadKeyProvider)
-    //             .cardPublisherSector)
-    //
-    //     verifySequence {
-    //       nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       nullCpsTag.readBlock(3)
-    //       nullCpsTag.readBlock(1)
-    //       nullCpsTag.readBlock(2)
-    //     }
-    //     confirmVerified(nullCpsTag)
-    //
-    //     for (cps in 0x01u..0x0Fu) {
-    //       val tag = mockClassic1k(validSector0.replaceIndex(17, cps.toUByte()).recalculateMadV1Crc())
-    //       assertEquals(
-    //           cps.toUByte(),
-    //           MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //               .cardPublisherSector)
-    //
-    //       verifySequence {
-    //         tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //         tag.readBlock(3)
-    //         tag.readBlock(1)
-    //         tag.readBlock(2)
-    //       }
-    //       confirmVerified(tag)
-    //     }
-    //   }
-    //
-    //   @Test
-    //   fun `check invalid mad v1 card publisher sector`() {
-    //     // CPS cannot point to sector 0x10 since that's reserved for MADv2.
-    //     val tag1 = mockClassic1k(validSector0.replaceIndex(17, 0x10u).recalculateMadV1Crc())
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag1.readBlock(3)
-    //       tag1.readBlock(1)
-    //       tag1.readBlock(2)
-    //     }
-    //     confirmVerified(tag1)
-    //
-    //     // Mad V1 CPS cannot exceed 15.
-    //     for (info in 0x10u..0x3Fu) {
-    //       val tag = mockClassic1k(validSector0.replaceIndex(17, info.toUByte()).recalculateMadV1Crc())
-    //       assertFailsWith<IllegalArgumentException> {
-    //         MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //       }
-    //     }
-    //   }
-    //
-    //   @Test
-    //   fun `valid mad v2 should decode`() {
-    //     val tag = mockClassic4k(validSector0.makeMadV2(), validSector16)
-    //
-    //     val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //     assertEquals(2u, mad.madVersion)
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //       tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(64)
-    //       tag.readBlock(65)
-    //       tag.readBlock(66)
-    //     }
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   @Test
-    //   fun `invalid mad v2 crc should fail`() {
-    //     // Replace CRC with 0 for MADv2 sector.
-    //     val tag = mockClassic4k(validSector0.makeMadV2(), validSector16.replaceIndex(0, 0u))
-    //
-    //     assertFailsWith<InvalidMadCrcException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //     }
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //       tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(64)
-    //       tag.readBlock(65)
-    //       tag.readBlock(66)
-    //     }
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   @Test
-    //   fun `check valid mad v2 cps`() {
-    //     // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
-    //
-    //     val nullCpsTag =
-    //         mockClassic4k(
-    //             validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x0u).recalculateMadV2Crc())
-    //     assertNull(
-    //         MifareApplicationDirectory.readFromMifareClassic(nullCpsTag, defaultReadKeyProvider)
-    //             .cardPublisherSector)
-    //
-    //     verifySequence {
-    //       nullCpsTag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       nullCpsTag.readBlock(3)
-    //       nullCpsTag.readBlock(1)
-    //       nullCpsTag.readBlock(2)
-    //       nullCpsTag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //       nullCpsTag.readBlock(64)
-    //       nullCpsTag.readBlock(65)
-    //       nullCpsTag.readBlock(66)
-    //     }
-    //     confirmVerified(nullCpsTag)
-    //
-    //     for (cps in 0x01u..0x027u) {
-    //       // Skip MADv2 sector.
-    //       if (cps == 0x10u) {
-    //         continue
-    //       }
-    //
-    //       val tag =
-    //           mockClassic4k(
-    //               validSector0.makeMadV2(),
-    //               validSector16.replaceIndex(1, cps.toUByte()).recalculateMadV2Crc())
-    //       assertEquals(
-    //           cps.toUByte(),
-    //           MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //               .cardPublisherSector)
-    //
-    //       verifySequence {
-    //         tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //         tag.readBlock(3)
-    //         tag.readBlock(1)
-    //         tag.readBlock(2)
-    //         tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //         tag.readBlock(64)
-    //         tag.readBlock(65)
-    //         tag.readBlock(66)
-    //       }
-    //       confirmVerified(nullCpsTag)
-    //     }
-    //   }
-    //
-    //   @Test
-    //   fun `invalid mad v2 cps should fail`() {
-    //     // 2nd byte in sector 16 is the info byte which contains the CPS pointer.
-    //
-    //     // CPS cannot point at MAD v2 sector 16 (0x10).
-    //     val tag1 =
-    //         mockClassic4k(
-    //             validSector0.makeMadV2(), validSector16.replaceIndex(1, 0x10u).recalculateMadV2Crc())
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.readFromMifareClassic(tag1, defaultReadKeyProvider)
-    //     }
-    //     verifySequence {
-    //       tag1.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag1.readBlock(3)
-    //       tag1.readBlock(1)
-    //       tag1.readBlock(2)
-    //       tag1.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //       tag1.readBlock(64)
-    //       tag1.readBlock(65)
-    //       tag1.readBlock(66)
-    //     }
-    //     confirmVerified(tag1)
-    //
-    //     // CPS pointer cannot exceed sector 39.
-    //     for (info in 0x28u..0x3Fu) {
-    //       val tag =
-    //           mockClassic4k(
-    //               validSector0.makeMadV2(),
-    //               validSector16.replaceIndex(1, info.toUByte()).recalculateMadV2Crc())
-    //       assertFailsWith<IllegalArgumentException> {
-    //         MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //       }
-    //
-    //       verifySequence {
-    //         tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //         tag.readBlock(3)
-    //         tag.readBlock(1)
-    //         tag.readBlock(2)
-    //         tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //         tag.readBlock(64)
-    //         tag.readBlock(65)
-    //         tag.readBlock(66)
-    //       }
-    //       confirmVerified(tag)
-    //     }
-    //   }
-    //
-    //   @Test
+    //   #[test]
     //   fun `check valid mad v1 applications`() {
     //     val tag = mockClassic1k(validSector0)
     //
@@ -777,17 +735,9 @@ mod test {
     //     assertEquals(
     //         MadAid.fromFunction(MadFunctionCluster.ACCESS_CONTROL_SECURITY_48, 0x12u),
     //         mad.applications[15])
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //     }
-    //     confirmVerified(tag)
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check more valid mad v1 applications`() {
     //     val tag = mockClassic1k(validSector0MoreAids)
     //
@@ -798,17 +748,9 @@ mod test {
     //       assertEquals(
     //           MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
     //     }
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //     }
-    //     confirmVerified(tag)
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check valid mad v2 applications`() {
     //     val tag = mockClassic4k(validSector0MoreAids.makeMadV2(), validSector16)
     //
@@ -822,22 +764,9 @@ mod test {
     //       assertEquals(
     //           MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
     //     }
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(3)
-    //       tag.readBlock(1)
-    //       tag.readBlock(2)
-    //       tag.authenticateSector(16, madKeyA, MifareKeyType.KeyA)
-    //       tag.readBlock(64)
-    //       tag.readBlock(65)
-    //       tag.readBlock(66)
-    //     }
-    //
-    //     confirmVerified(tag)
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create mad`() {
     //     MifareApplicationDirectory.create(true, 1u, null, mapOf())
     //     MifareApplicationDirectory.create(false, 1u, null, mapOf())
@@ -858,7 +787,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create mad v1 with apps`() {
     //     for (sector in 1..15) {
     //       val mad =
@@ -887,7 +816,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create mad v2 with apps`() {
     //     for (sector in 1..39) {
     //       if (sector == 16) {
@@ -923,7 +852,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create invalid mad version`() {
     //     assertFailsWith<IllegalArgumentException> {
     //       MifareApplicationDirectory.create(true, 0u, null, mapOf())
@@ -934,7 +863,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create invalid mad cps`() {
     //     assertFailsWith<IllegalArgumentException> {
     //       MifareApplicationDirectory.create(true, 1u, 0u, mapOf())
@@ -953,7 +882,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create mad v1 with invalid apps`() {
     //     assertFailsWith<IllegalArgumentException> {
     //       MifareApplicationDirectory.create(
@@ -968,7 +897,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check create mad v2 with invalid apps`() {
     //     assertFailsWith<IllegalArgumentException> {
     //       MifareApplicationDirectory.create(
@@ -988,7 +917,7 @@ mod test {
     //     }
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check mad v1 apps are filled`() {
     //     val mad = MifareApplicationDirectory.create(true, 1u, null, mapOf())
     //     assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs")
@@ -999,7 +928,7 @@ mod test {
     //         "Expected all empty apps to be filled with FREE")
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `check mad v2 apps are filled`() {
     //     val mad = MifareApplicationDirectory.create(true, 2u, null, mapOf())
     //     assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs")
@@ -1010,7 +939,7 @@ mod test {
     //         "Expected all empty apps to be filled with FREE")
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `mad v1 should write correctly`() {
     //     val mad =
     //         MifareApplicationDirectory.create(
@@ -1056,7 +985,7 @@ mod test {
     //     confirmVerified(tag)
     //   }
     //
-    //   @Test
+    //   #[test]
     //   fun `mad v2 should write correctly`() {
     //     val mad =
     //         MifareApplicationDirectory.create(
