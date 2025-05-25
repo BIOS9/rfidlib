@@ -1,9 +1,9 @@
 use gallagher_rfid_core::mifare::{
     application_directory::MifareApplicationDirectory,
-    classic::{FourBlockOffset, FourBlockSector, KeyProvider, KeyType, Tag},
+    classic::{KeyProvider, KeyType, Tag},
 };
 use gallagher_rfid_pcsc::{
-    acr122u::{Acr122uCard, Acr122uReader},
+    acr122u::Acr122uReader,
     smart_card::{SmartCardContext, SmartCardReader},
 };
 
@@ -14,7 +14,7 @@ impl KeyProvider for SimpleKeyProvider {
         tag: &mut T,
         sector: gallagher_rfid_core::mifare::classic::Sector,
     ) -> Result<(), gallagher_rfid_core::mifare::classic::Error> {
-        tag.authenticate(sector, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], KeyType::KeyA)
+        tag.authenticate(sector, &[0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5], KeyType::KeyA)
     }
 }
 

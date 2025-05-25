@@ -42,14 +42,14 @@ impl Tag for Acr122uCard {
     fn authenticate(
         &mut self,
         sector: Sector,
-        key: [u8; 6],
+        key: &[u8; 6],
         key_type: KeyType,
     ) -> Result<(), mifare::classic::Error> {
         // Load key into volatile memory (slot 0)
         let load_key_apdu: [u8; 11] = {
             let mut apdu = [0u8; 11];
             apdu[..5].copy_from_slice(&[0xFF, 0x82, 0x00, 0x00, 0x06]);
-            apdu[5..].copy_from_slice(&key);
+            apdu[5..].copy_from_slice(key);
             apdu
         };
         match self.smart_card.transmit_apdu(&load_key_apdu)?.as_slice() {
