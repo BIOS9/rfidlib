@@ -187,6 +187,7 @@ impl TryFrom<u8> for AdministrationCode {
 pub enum MadAid {
     CardAdministration(AdministrationCode),
     Application(FunctionCluster, u8),
+    Reserved(u8, u8),
 }
 
 impl MadAid {
@@ -196,10 +197,11 @@ impl MadAid {
                 application_value,
             )?))
         } else {
-            Ok(MadAid::Application(
-                FunctionCluster::try_from(function_cluster)?,
-                application_value,
-            ))
+            if let Ok(fc) = FunctionCluster::try_from(function_cluster) {
+                Ok(MadAid::Application(fc, application_value))
+            } else {
+                Ok(MadAid::Reserved(function_cluster, application_value))
+            }
         }
     }
 }
@@ -380,7 +382,13 @@ mod tests {
         for i in 1..=u8::MAX {
             if let Err(_) = FunctionCluster::try_from(i) {
                 for j in u8::MIN..=u8::MAX {
-                    assert!(MadAid::try_from_u8(i, j).is_err());
+                    match MadAid::try_from_u8(i, j) {
+                        Ok(MadAid::Reserved(a, b)) => {
+                            assert_eq!(i, a);
+                            assert_eq!(j, b);
+                        }
+                        _ => panic!("Expected reserved application"),
+                    }
                 }
             }
         }
