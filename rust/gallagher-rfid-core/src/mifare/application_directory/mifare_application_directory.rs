@@ -66,6 +66,14 @@ impl MifareApplicationDirectory {
             SixteenBlockSector::S39 as u8
         };
 
+        // Filter out free applications,
+        // sectors without an app are implicitly free.
+        let applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT> = applications
+            .iter()
+            .filter(|a| *a.1 != MadAid::CardAdministration(AdministrationCode::Free))
+            .map(|(&sector, &aid)| (sector, aid))
+            .collect();
+
         // Max sector 15 for MADv1, sector 39 for MADv2.
         if mad_version == MadVersion::V1 {
             if let Some((&sector, _)) = applications
@@ -257,6 +265,12 @@ impl MifareApplicationDirectory {
         // Write MAD to blocks
         todo!()
     }
+
+    pub fn iter_applications(&self) -> impl Iterator<Item = (NonMadSector, MadAid)> + '_ {
+        self.applications
+            .iter()
+            .map(|(sector, aid)| (*sector, *aid))
+    }
 }
 
 #[derive(Debug)]
@@ -304,11 +318,16 @@ fn crc8<'a>(data: impl Iterator<Item = &'a u8>) -> u8 {
 
 #[cfg(test)]
 mod test {
+    use crate::mifare::application_directory::mad_application_id::{
+        AdministrationCode, FunctionCluster, MadAid,
+    };
     use crate::mifare::application_directory::mifare_application_directory::crc8;
+    use crate::mifare::application_directory::non_mad_sector::NonMadSector;
     use crate::mifare::application_directory::{MadError, MadVersion, MifareApplicationDirectory};
     use crate::mifare::classic::{
         Block, Error, FourBlockSector, KeyProvider, KeyType, Sector, Tag,
     };
+    use heapless::LinearMap;
     use std::fmt::Debug;
 
     struct MockClassic1k<'a> {
@@ -407,6 +426,7 @@ mod test {
     const TEST_MAD_A_KEY: &[u8; 6] = b"\xA0\xA1\xA2\xA3\xA4\xA5";
     const TEST_MAD_B_KEY: &[u8; 6] = b"\xB0\xB1\xB2\xB3\xB4\xB5";
     const VALID_SECTOR_0: &[u8; 64] = b"\x9D\x49\x91\x16\xDE\x28\x02\x00\xE3\x27\x00\x20\x00\x00\x00\x17\xCD\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x48\x12\x48\x00\x00\x00\x00\x00\x00\x78\x77\x88\xC1\x00\x00\x00\x00\x00\x00";
+    const VALID_SECTOR_0_MORE_APPS: &[u8; 64] = b"\x9D\x49\x91\x16\xDE\x28\x02\x00\xE3\x27\x00\x20\x00\x00\x00\x17\x23\x00\x01\xFE\x02\xFD\x03\xFC\x04\xFB\x05\xFA\x06\xF9\x07\xF8\x08\xF7\x09\xF6\x0A\xF5\x0B\xF4\x0C\xF3\x0D\xF2\x0E\xF1\x0F\xF0\x00\x00\x00\x00\x00\x00\x78\x77\x88\xC1\x00\x00\x00\x00\x00\x00";
     const VALID_SECTOR_16: &[u8; 64] = b"\xD2\x00\x11\xEE\x12\xED\x13\xEC\x14\xEB\x15\xEA\x16\xE9\x17\xE8\x18\xE7\x19\xE6\x1A\xE5\x1B\xE4\x1C\xE3\x1D\xE2\x1E\xE1\x1F\xE0\x20\xDF\x21\xDE\x22\xDD\x23\xDC\x24\xDB\x25\xDA\x26\xD9\x27\xD8\x00\x00\x00\x00\x00\x00\x78\x77\x88\xC2\x00\x00\x00\x00\x00\x00";
 
     const DEFAULT_READ_KEY_PROVIDER: MockKeyProvider = MockKeyProvider {
@@ -462,13 +482,6 @@ mod test {
             }
         }
     }
-
-    //   private val validSector0MoreAids =
-    //       ("9D 49 91 16 DE 28 02 00 E3 27 00 20 00 00 00 17" +
-    //               "23 00 01 FE 02 FD 03 FC 04 FB 05 FA 06 F9 07 F8" +
-    //               "08 F7 09 F6 0A F5 0B F4 0C F3 0D F2 0E F1 0F F0" +
-    //               "00 00 00 00 00 00 78 77 88 C1 00 00 00 00 00 00")
-    //           .hexToUByteArray()
 
     #[test]
     fn crc8_value() {
@@ -715,229 +728,269 @@ mod test {
             }
         }
     }
-    //
-    //   #[test]
-    //   fun `check valid mad v1 applications`() {
-    //     val tag = mockClassic1k(validSector0)
-    //
-    //     val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //
-    //     assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
-    //     for (sector in 1..13) {
-    //       assertEquals(
-    //           MadAid.fromAdministrationCode(MadAdministrationCode.FREE), mad.applications[sector])
-    //     }
-    //
-    //     // Gallagher AIDs
-    //     assertEquals(
-    //         MadAid.fromFunction(MadFunctionCluster.ACCESS_CONTROL_SECURITY_48, 0x11u),
-    //         mad.applications[14])
-    //     assertEquals(
-    //         MadAid.fromFunction(MadFunctionCluster.ACCESS_CONTROL_SECURITY_48, 0x12u),
-    //         mad.applications[15])
-    //   }
-    //
-    //   #[test]
-    //   fun `check more valid mad v1 applications`() {
-    //     val tag = mockClassic1k(validSector0MoreAids)
-    //
-    //     val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //
-    //     assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
-    //     for (sector in 1..15) {
-    //       assertEquals(
-    //           MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check valid mad v2 applications`() {
-    //     val tag = mockClassic4k(validSector0MoreAids.makeMadV2(), validSector16)
-    //
-    //     val mad = MifareApplicationDirectory.readFromMifareClassic(tag, defaultReadKeyProvider)
-    //
-    //     assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs.")
-    //     for (sector in 1..39) {
-    //       if (sector == 16) {
-    //         continue // Skip MADv2 sector.
-    //       }
-    //       assertEquals(
-    //           MadAid.fromRaw(sector.toUByte().inv(), sector.toUByte()), mad.applications[sector])
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create mad`() {
-    //     MifareApplicationDirectory.create(true, 1u, null, mapOf())
-    //     MifareApplicationDirectory.create(false, 1u, null, mapOf())
-    //     MifareApplicationDirectory.create(true, 2u, null, mapOf())
-    //     MifareApplicationDirectory.create(false, 2u, null, mapOf())
-    //
-    //     for (cps in 1u..15u) {
-    //       MifareApplicationDirectory.create(true, 1u, cps.toUByte(), mapOf())
-    //       MifareApplicationDirectory.create(false, 1u, cps.toUByte(), mapOf())
-    //     }
-    //
-    //     for (cps in 1u..39u) {
-    //       if (cps == 16u) {
-    //         continue // Skip MADv2 sector
-    //       }
-    //       MifareApplicationDirectory.create(true, 2u, cps.toUByte(), mapOf())
-    //       MifareApplicationDirectory.create(false, 2u, cps.toUByte(), mapOf())
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create mad v1 with apps`() {
-    //     for (sector in 1..15) {
-    //       val mad =
-    //           MifareApplicationDirectory.create(
-    //               true,
-    //               1u,
-    //               null,
-    //               mapOf(
-    //                   sector to
-    //                       MadAid.fromRaw(
-    //                           sector.toUByte().inv(), sector.toUByte()) // Fill with some AIDs
-    //                   ))
-    //       assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs.")
-    //     }
-    //
-    //     val madFull =
-    //         MifareApplicationDirectory.create(
-    //             true,
-    //             1u,
-    //             null,
-    //             (1..15).associateWith { s -> MadAid.fromRaw(s.toUByte().inv(), s.toUByte()) })
-    //
-    //     assertEquals(15, madFull.applications.size, "Expected 15 MADv1 sector AIDs.")
-    //     for (sector in 1..15) {
-    //       assertEquals(sector.toUByte(), madFull.applications[sector]!!.applicationCode)
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create mad v2 with apps`() {
-    //     for (sector in 1..39) {
-    //       if (sector == 16) {
-    //         continue // Skip MADv2 sector
-    //       }
-    //       val mad =
-    //           MifareApplicationDirectory.create(
-    //               true,
-    //               2u,
-    //               null,
-    //               mapOf(
-    //                   sector to
-    //                       MadAid.fromRaw(
-    //                           sector.toUByte().inv(), sector.toUByte()) // Fill with some AIDs.
-    //                   ))
-    //       assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs.")
-    //     }
-    //
-    //     val madFull =
-    //         MifareApplicationDirectory.create(
-    //             true,
-    //             2u,
-    //             null,
-    //             (1..39)
-    //                 .filter { s -> s != 16 } // Skip MADv2 sector.
-    //                 .associateWith { s -> MadAid.fromRaw(s.toUByte().inv(), s.toUByte()) })
-    //     assertEquals(38, madFull.applications.size, "Expected 38 MADv2 sector AIDs.")
-    //     for (sector in 1..39) {
-    //       if (sector == 16) {
-    //         continue // Skip MADv2 sector 16.
-    //       }
-    //       assertEquals(sector.toUByte(), madFull.applications[sector]!!.applicationCode)
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create invalid mad version`() {
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 0u, null, mapOf())
-    //     }
-    //
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 3u, null, mapOf())
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create invalid mad cps`() {
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 1u, 0u, mapOf())
-    //     }
-    //
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 2u, 0u, mapOf())
-    //     }
-    //
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 1u, 16u, mapOf())
-    //     }
-    //
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(true, 2u, 40u, mapOf())
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create mad v1 with invalid apps`() {
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(
-    //           true, 1u, null, mapOf(0 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)))
-    //     }
-    //
-    //     for (sector in 16..100) {
-    //       assertFailsWith<IllegalArgumentException> {
-    //         MifareApplicationDirectory.create(
-    //             true, 1u, null, mapOf(sector to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)))
-    //       }
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check create mad v2 with invalid apps`() {
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(
-    //           true, 2u, null, mapOf(0 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)))
-    //     }
-    //
-    //     assertFailsWith<IllegalArgumentException> {
-    //       MifareApplicationDirectory.create(
-    //           true, 2u, null, mapOf(16 to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)))
-    //     }
-    //
-    //     for (sector in 40..100) {
-    //       assertFailsWith<IllegalArgumentException> {
-    //         MifareApplicationDirectory.create(
-    //             true, 1u, null, mapOf(sector to MadAid.fromFunction(MadFunctionCluster.FOOD, 0u)))
-    //       }
-    //     }
-    //   }
-    //
-    //   #[test]
-    //   fun `check mad v1 apps are filled`() {
-    //     val mad = MifareApplicationDirectory.create(true, 1u, null, mapOf())
-    //     assertEquals(15, mad.applications.size, "Expected 15 MADv1 sector AIDs")
-    //     assertTrue(
-    //         mad.applications.all { (_, aid) ->
-    //           aid == MadAid.fromAdministrationCode(MadAdministrationCode.FREE)
-    //         },
-    //         "Expected all empty apps to be filled with FREE")
-    //   }
-    //
-    //   #[test]
-    //   fun `check mad v2 apps are filled`() {
-    //     val mad = MifareApplicationDirectory.create(true, 2u, null, mapOf())
-    //     assertEquals(38, mad.applications.size, "Expected 38 MADv2 sector AIDs")
-    //     assertTrue(
-    //         mad.applications.all { (_, aid) ->
-    //           aid == MadAid.fromAdministrationCode(MadAdministrationCode.FREE)
-    //         },
-    //         "Expected all empty apps to be filled with FREE")
-    //   }
+
+    #[test]
+    fn valid_mad_v1_applications() {
+        let mut tag = VALID_SECTOR_0.mock_1k();
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+
+        let apps: LinearMap<NonMadSector, MadAid, 38> = mad.iter_applications().collect();
+        assert_eq!(2, apps.len());
+
+        let s14 = NonMadSector::try_from(Sector::from(FourBlockSector::S14)).unwrap();
+        assert_eq!(
+            MadAid::Application(FunctionCluster::AccessControlSecurity48, 0x11),
+            apps[&s14]
+        );
+
+        let s15 = NonMadSector::try_from(Sector::from(FourBlockSector::S15)).unwrap();
+        assert_eq!(
+            MadAid::Application(FunctionCluster::AccessControlSecurity48, 0x12),
+            apps[&s15]
+        );
+    }
+
+    #[test]
+    fn more_valid_mad_v1_applications() {
+        let mut tag = VALID_SECTOR_0_MORE_APPS.mock_1k();
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+
+        let apps: LinearMap<NonMadSector, MadAid, 38> = mad.iter_applications().collect();
+        assert_eq!(15, apps.len());
+
+        for i in 1u8..=15 {
+            let sector = Sector::try_from(i).unwrap();
+            let sector = NonMadSector::try_from(sector).unwrap();
+            assert_eq!(MadAid::try_from_u8(!i, i).unwrap(), apps[&sector]);
+        }
+    }
+
+    #[test]
+    fn valid_mad_v2_applications() {
+        let mut tag = VALID_SECTOR_0_MORE_APPS
+            .to_mad_v2()
+            .mock_4k(*VALID_SECTOR_16);
+        let mad = MifareApplicationDirectory::read_from_tag(&mut tag, &DEFAULT_READ_KEY_PROVIDER)
+            .unwrap();
+
+        let apps: LinearMap<NonMadSector, MadAid, 38> = mad.iter_applications().collect();
+        assert_eq!(38, apps.len());
+
+        for i in 1u8..=39 {
+            if i == 16 {
+                continue; // Skip MADv2 sector.
+            }
+
+            let sector = Sector::try_from(i).unwrap();
+            let sector = NonMadSector::try_from(sector).unwrap();
+            assert_eq!(MadAid::try_from_u8(!i, i).unwrap(), apps[&sector]);
+        }
+    }
+
+    #[test]
+    fn create_mad() {
+        _ = MifareApplicationDirectory::new(true, MadVersion::V1, None, LinearMap::default())
+            .unwrap();
+        _ = MifareApplicationDirectory::new(false, MadVersion::V1, None, LinearMap::default())
+            .unwrap();
+        _ = MifareApplicationDirectory::new(false, MadVersion::V2, None, LinearMap::default())
+            .unwrap();
+        _ = MifareApplicationDirectory::new(true, MadVersion::V2, None, LinearMap::default())
+            .unwrap();
+
+        for cps in 1u8..=15 {
+            let cps = NonMadSector::try_from(Sector::try_from(cps).unwrap()).unwrap();
+            _ = MifareApplicationDirectory::new(
+                true,
+                MadVersion::V1,
+                Some(cps),
+                LinearMap::default(),
+            )
+            .unwrap();
+            _ = MifareApplicationDirectory::new(
+                false,
+                MadVersion::V1,
+                Some(cps),
+                LinearMap::default(),
+            )
+            .unwrap();
+        }
+
+        for cps in 1u8..=39 {
+            if cps == 16 {
+                continue; // Skip MADv2 sector.
+            }
+            let cps = NonMadSector::try_from(Sector::try_from(cps).unwrap()).unwrap();
+            _ = MifareApplicationDirectory::new(
+                true,
+                MadVersion::V2,
+                Some(cps),
+                LinearMap::default(),
+            )
+            .unwrap();
+            _ = MifareApplicationDirectory::new(
+                false,
+                MadVersion::V2,
+                Some(cps),
+                LinearMap::default(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn create_mad_v1_with_apps() {
+        for i in 1u8..=15 {
+            let apps = (1u8..=i)
+                .into_iter()
+                .map(|x| {
+                    (
+                        NonMadSector::try_from(Sector::try_from(x).unwrap()).unwrap(),
+                        MadAid::try_from_u8(!x, x).unwrap(),
+                    )
+                })
+                .collect();
+            let mad = MifareApplicationDirectory::new(true, MadVersion::V1, None, apps).unwrap();
+
+            let apps: LinearMap<NonMadSector, MadAid, 38> = mad.iter_applications().collect();
+            assert_eq!(i as usize, apps.len());
+
+            for j in 1u8..=i {
+                let sector = NonMadSector::try_from(Sector::try_from(j).unwrap()).unwrap();
+                assert_eq!(MadAid::try_from_u8(!j, j).unwrap(), apps[&sector]);
+            }
+        }
+    }
+
+    #[test]
+    fn create_mad_v2_with_apps() {
+        for i in 17u8..=39 {
+            let apps = (1u8..=i)
+                .into_iter()
+                .filter(|x| *x != 16)
+                .map(|x| {
+                    (
+                        NonMadSector::try_from(Sector::try_from(x).unwrap()).unwrap(),
+                        MadAid::try_from_u8(!x, x).unwrap(),
+                    )
+                })
+                .collect();
+            let mad = MifareApplicationDirectory::new(true, MadVersion::V2, None, apps).unwrap();
+
+            let apps: LinearMap<NonMadSector, MadAid, 38> = mad.iter_applications().collect();
+            assert_eq!(i as usize - 1, apps.len());
+
+            for j in 1u8..=i {
+                if (j == 16) {
+                    continue;
+                }
+                let sector = NonMadSector::try_from(Sector::try_from(j).unwrap()).unwrap();
+                assert_eq!(MadAid::try_from_u8(!j, j).unwrap(), apps[&sector]);
+            }
+        }
+    }
+
+    #[test]
+    fn create_invalid_mad_cps() {
+        for i in 16u8..=39 {
+            if i == 16 {
+                continue;
+            }
+
+            let sector = Sector::try_from(i).unwrap();
+            let cps = NonMadSector::try_from(sector).unwrap();
+            let result = MifareApplicationDirectory::new(
+                true,
+                MadVersion::V1,
+                Some(cps),
+                LinearMap::default(),
+            );
+
+            match result {
+                Ok(_) => panic!("Expected MADv1 CPS error"),
+                Err(MadError::InvalidCardPublisherSectorForMadV1(s)) => {
+                    assert_eq!(sector, s);
+                }
+                Err(_) => panic!("Expected MADv1 CPS error"),
+            }
+        }
+    }
+
+    #[test]
+    fn create_mad_v1_with_invalid_apps() {
+        for i in 17..=39 {
+            let sector = Sector::try_from(i).unwrap();
+            let app_sector = NonMadSector::try_from(sector).unwrap();
+
+            let mut apps = LinearMap::new();
+            let result = apps.insert(
+                app_sector,
+                MadAid::CardAdministration(AdministrationCode::AdditionalDirectoryInfo),
+            );
+            match result {
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("Insert should succeed"),
+                Err(_) => panic!("Insert should succeed"),
+            }
+
+            let mad = MifareApplicationDirectory::new(true, MadVersion::V1, None, apps);
+            match mad {
+                Ok(_) => panic!("Expected MADv1 app sector error"),
+                Err(MadError::InvalidApplicationSectorForMadV1(s)) => {
+                    assert_eq!(sector, s);
+                }
+                Err(_) => panic!("Expected MADv1 app sector error"),
+            }
+        }
+    }
+
+    #[test]
+    fn create_mad_v1_with_free_apps() {
+        for i in 1..=15 {
+            if i == 16 {
+                continue;
+            }
+
+            let apps = (1u8..=i)
+                .into_iter()
+                .map(|x| {
+                    (
+                        NonMadSector::try_from(Sector::try_from(x).unwrap()).unwrap(),
+                        MadAid::CardAdministration(AdministrationCode::Free),
+                    )
+                })
+                .collect();
+
+            let mad = MifareApplicationDirectory::new(true, MadVersion::V1, None, apps).unwrap();
+            assert_eq!(0, mad.iter_applications().count());
+        }
+    }
+
+    #[test]
+    fn create_mad_v2_with_free_apps() {
+        for i in 1..=39 {
+            if i == 16 {
+                continue;
+            }
+
+            let apps = (1u8..=i)
+                .into_iter()
+                .filter(|x| *x != 16)
+                .map(|x| {
+                    (
+                        NonMadSector::try_from(Sector::try_from(x).unwrap()).unwrap(),
+                        MadAid::CardAdministration(AdministrationCode::Free),
+                    )
+                })
+                .collect();
+
+            let mad = MifareApplicationDirectory::new(true, MadVersion::V2, None, apps).unwrap();
+            assert_eq!(0, mad.iter_applications().count());
+        }
+    }
+
     //
     //   #[test]
     //   fun `mad v1 should write correctly`() {
