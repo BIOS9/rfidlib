@@ -204,6 +204,28 @@ impl MadAid {
             }
         }
     }
+
+    pub fn try_from_u16(value: u16) -> Result<Self, MadAidError> {
+        let function_cluster = (value >> 8) as u8;
+        let application_value = value as u8;
+
+        Self::try_from_u8(function_cluster, application_value)
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        let [function_cluster, application_code] = self.to_u8_slice();
+        ((function_cluster as u16) << 8) | (application_code as u16)
+    }
+
+    pub fn to_u8_slice(&self) -> [u8; 2] {
+        let (function_cluster, application_code) = match *self {
+            MadAid::CardAdministration(admin_code) => (0, admin_code as u8),
+            MadAid::Application(fc, app) => (fc as u8, app),
+            MadAid::Reserved(fc, app) => (fc, app),
+        };
+
+        [function_cluster, application_code]
+    }
 }
 
 #[derive(Debug)]
@@ -372,6 +394,9 @@ mod tests {
                         }
                         _ => panic!("Expected application"),
                     }
+                    let slice = aid.to_u8_slice();
+                    assert_eq!(i, slice[0]);
+                    assert_eq!(j, slice[1]);
                 }
             }
         }
@@ -405,6 +430,46 @@ mod tests {
                     }
                     _ => panic!("Expected card administration"),
                 }
+                let slice = aid.to_u8_slice();
+                assert_eq!(0, slice[0]);
+                assert_eq!(i, slice[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn mad_try_from_u16_valid() {
+        let aid = MadAid::try_from_u16(0x4811).unwrap();
+        match aid {
+            MadAid::Application(fc, app) => {
+                assert_eq!(FunctionCluster::AccessControlSecurity48, fc);
+                assert_eq!(0x11, app);
+            }
+            _ => panic!("Expected application"),
+        }
+
+        let aid = MadAid::try_from_u16(0x4812).unwrap();
+        match aid {
+            MadAid::Application(fc, app) => {
+                assert_eq!(FunctionCluster::AccessControlSecurity48, fc);
+                assert_eq!(0x12, app);
+            }
+            _ => panic!("Expected application"),
+        }
+
+        for i in 1..=u16::MAX {
+            let fc = (i >> 8) as u8;
+            let app = i as u8;
+            if let Ok(_) = FunctionCluster::try_from(fc) {
+                let aid = MadAid::try_from_u16(i).unwrap();
+                match aid {
+                    MadAid::Application(f, a) => {
+                        assert_eq!(fc, f as u8);
+                        assert_eq!(app, a);
+                    }
+                    _ => panic!("Expected application"),
+                }
+                assert_eq!(i, aid.to_u16());
             }
         }
     }

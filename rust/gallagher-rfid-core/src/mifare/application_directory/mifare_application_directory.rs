@@ -1,10 +1,9 @@
+use super::mad_application_id::{AdministrationCode, MadAid, MadAidError};
 use crate::mifare::application_directory::non_mad_sector::NonMadSector;
 use crate::mifare::classic::{
     Error, FourBlockOffset, FourBlockSector, KeyProvider, Sector, SixteenBlockSector, Tag,
 };
 use heapless::LinearMap;
-
-use super::mad_application_id::{AdministrationCode, MadAid, MadAidError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -259,11 +258,128 @@ impl MifareApplicationDirectory {
 
     pub fn write_to_tag<T: Tag>(
         &self,
-        _tag: &mut T,
-        _key_provider: &impl KeyProvider,
+        tag: &mut T,
+        key_provider: &impl KeyProvider,
     ) -> Result<(), MadError> {
         // Write MAD to blocks
-        todo!()
+        // Authenticate Sector 0 (MADv1)
+        let mad_v1_sector = FourBlockSector::S0;
+        key_provider.authenticate(tag, mad_v1_sector.into())?;
+
+        // 3 blocks worth of data (48 bytes)
+        // First block is skipped because it's the manufacturer block.
+        let mut data = [0u8; 48];
+
+        // Info byte is Card Publisher Sector or zero if that's absent.
+        let info_byte = if let Some(cps) = self.card_publisher_sector {
+            cps.into()
+        } else {
+            0u8
+        };
+        data[1] = info_byte;
+
+        // Application bytes, 15 apps with two bytes each = 30 bytes.
+        let free_aid = MadAid::CardAdministration(AdministrationCode::Free);
+        for sector in Sector::iter().skip(1).take(15) {
+            // Convert sector into non_mad_sector.
+            // This should always succeed for sectors 1..=15
+            let sector = NonMadSector::try_from(sector).expect("Expected valid non-MAD sector");
+
+            // If application is not present for a sector, fill it with FREE app (0x0000).
+            let app = self.applications.get(&sector).unwrap_or(&free_aid);
+            let app = app.to_u8_slice();
+            // Index in sector data is offset by 2 for CRC and Info byte,
+            // And each app takes two bytes so multiply by two.
+            let sector_index = u8::from(sector) - 1;
+            let index = ((sector_index * 2) + 2) as usize;
+            data[index] = app[1];
+            data[index + 1] = app[0];
+        }
+
+        // Calculate and insert CRC for MADv1.
+        let crc = crc8(data[1..=31].iter());
+        data[0] = crc;
+
+        // Insert access keys and permission bits.
+        data[32..38].copy_from_slice(&Self::MAD_KEY_A);
+        data[38..41].copy_from_slice(&Self::MAD_ACCESS_BITS); // Intentionally left byte 41 unwritten for GPB.
+        data[42..48].copy_from_slice(&Self::MAD_KEY_B);
+
+        // Generate General Purpose Byte (GPB).
+        let gpb = 0b10000000 | // DA bit (MAD available) must be true since we're writing a MAD.
+            if self.multi_application_card { 0b01000000 } else { 0b00000000 } | // MA bit (Multi Application Card)
+            if self.mad_version == MadVersion::V1 { 0b00000001 } else { 0b00000010 }; //ADV bits (MAD version 1 or 2).
+
+        // Write GPB at 10th byte of block 3.
+        data[41] = gpb;
+
+        // Split data into blocks.
+        // This should always succeed since we know the size of everything.
+        let block1: [u8; 16] = data[0..16].try_into().unwrap();
+        let block2: [u8; 16] = data[16..32].try_into().unwrap();
+        let block3: [u8; 16] = data[32..48].try_into().unwrap();
+
+        // Write to the tag.
+        tag.write_block(mad_v1_sector.block(FourBlockOffset::B1), block1)?;
+        tag.write_block(mad_v1_sector.block(FourBlockOffset::B2), block2)?;
+        tag.write_block(mad_v1_sector.block(FourBlockOffset::B3), block3)?;
+
+        if self.mad_version == MadVersion::V2 {
+            // Authenticate Sector 16 (MADv2)
+            let mad_v2_sector = FourBlockSector::S16;
+            key_provider.authenticate(tag, mad_v2_sector.into())?;
+
+            // A full sized sector for MADv2 (no manufacturer block like MADv1).
+            let mut data = [0u8; 64];
+
+            // Write info byte to second byte in sector.
+            data[1] = info_byte;
+
+            // Application bytes, 15 apps with two bytes each = 30 bytes.
+            let free_aid = MadAid::CardAdministration(AdministrationCode::Free);
+            for sector in Sector::iter().skip(17) {
+                // Convert sector into non_mad_sector.
+                // This should always succeed for sectors 17..=39
+                let sector = NonMadSector::try_from(sector).expect("Expected valid non-MAD sector");
+
+                // If application is not present for a sector, fill it with FREE app (0x0000).
+                let app = self.applications.get(&sector).unwrap_or(&free_aid);
+                let app = app.to_u8_slice();
+                // Index in sector data is offset by 2 for CRC and Info byte,
+                // And each app takes two bytes so multiply by two.
+                let sector_index = u8::from(sector) - 17;
+                let index = ((sector_index * 2) + 2) as usize;
+                data[index] = app[1];
+                data[index + 1] = app[0];
+            }
+
+            // Calculate and insert CRC for MADv2.
+            let crc = crc8(data[1..=47].iter());
+            data[0] = crc;
+
+            // Insert access keys and permission bits.
+            data[48..54].copy_from_slice(&Self::MAD_KEY_A);
+            data[54..57].copy_from_slice(&Self::MAD_ACCESS_BITS); // Intentionally left byte 57 unwritten for GPB.
+            data[58..64].copy_from_slice(&Self::MAD_KEY_B);
+
+            // Write GPB at 10th byte of block 3.
+            data[57] = gpb;
+
+            // Split data into blocks.
+            // This should always succeed since we know the size of everything.
+            let block0: [u8; 16] = data[0..16].try_into().unwrap();
+            let block1: [u8; 16] = data[16..32].try_into().unwrap();
+            let block2: [u8; 16] = data[32..48].try_into().unwrap();
+            let block3: [u8; 16] = data[48..64].try_into().unwrap();
+
+            // Write to the tag.
+            tag.write_block(mad_v2_sector.block(FourBlockOffset::B0), block0)?;
+            tag.write_block(mad_v2_sector.block(FourBlockOffset::B1), block1)?;
+            tag.write_block(mad_v2_sector.block(FourBlockOffset::B2), block2)?;
+            tag.write_block(mad_v2_sector.block(FourBlockOffset::B3), block3)?;
+        }
+
+        Ok(())
     }
 
     pub fn iter_applications(&self) -> impl Iterator<Item = (NonMadSector, MadAid)> + '_ {
@@ -328,7 +444,6 @@ mod test {
         Block, Error, FourBlockSector, KeyProvider, KeyType, Sector, Tag,
     };
     use heapless::LinearMap;
-    use std::fmt::Debug;
 
     struct MockClassic1k<'a> {
         key: &'a [u8; 6],
@@ -412,6 +527,111 @@ mod test {
         }
     }
 
+    struct MockWritableClassic1k<'a> {
+        pub key: &'a [u8; 6],
+        pub sector0: [u8; 64],
+        pub authenticated: bool,
+    }
+
+    impl<'a> Tag for MockWritableClassic1k<'a> {
+        fn authenticate(
+            &mut self,
+            sector: Sector,
+            key: &[u8; 6],
+            key_type: KeyType,
+        ) -> Result<(), Error> {
+            if key.eq(self.key) && sector == FourBlockSector::S0.into() && key_type == KeyType::KeyB
+            {
+                self.authenticated = true;
+                Ok(())
+            } else {
+                panic!("Unexpected authentication")
+            }
+        }
+
+        fn read_block(&mut self, _: Block) -> Result<[u8; 16], Error> {
+            panic!("Unexpected block read");
+        }
+
+        fn write_block(&mut self, block: Block, data: [u8; 16]) -> Result<(), Error> {
+            let sector: Sector = block.into();
+            match sector {
+                Sector::FourBlock(FourBlockSector::S0) => {
+                    assert!(self.authenticated);
+                }
+                _ => panic!("Unexpected sector write"),
+            }
+
+            match u8::from(block) {
+                1 => self.sector0[16..32].copy_from_slice(&data),
+                2 => self.sector0[32..48].copy_from_slice(&data),
+                3 => self.sector0[48..64].copy_from_slice(&data),
+                _ => panic!("Unexpected block write"),
+            };
+
+            Ok(())
+        }
+    }
+
+    struct MockWritableClassic4k<'a> {
+        pub key: &'a [u8; 6],
+        pub sector0: [u8; 64],
+        pub sector16: [u8; 64],
+        pub authenticated0: bool,
+        pub authenticated16: bool,
+    }
+
+    impl<'a> Tag for MockWritableClassic4k<'a> {
+        fn authenticate(
+            &mut self,
+            sector: Sector,
+            key: &[u8; 6],
+            key_type: KeyType,
+        ) -> Result<(), Error> {
+            if !key.eq(self.key) && key_type == KeyType::KeyB {
+                panic!("Unexpected key");
+            }
+
+            match sector {
+                Sector::FourBlock(FourBlockSector::S0) => self.authenticated0 = true,
+                Sector::FourBlock(FourBlockSector::S16) => self.authenticated16 = true,
+                _ => panic!("Unexpected sector"),
+            };
+
+            Ok(())
+        }
+
+        fn read_block(&mut self, _: Block) -> Result<[u8; 16], Error> {
+            panic!("Unexpected block read");
+        }
+
+        fn write_block(&mut self, block: Block, data: [u8; 16]) -> Result<(), Error> {
+            let sector: Sector = block.into();
+            match sector {
+                Sector::FourBlock(FourBlockSector::S0) => {
+                    assert!(self.authenticated0);
+                }
+                Sector::FourBlock(FourBlockSector::S16) => {
+                    assert!(self.authenticated16);
+                }
+                _ => panic!("Unexpected sector write"),
+            }
+
+            match u8::from(block) {
+                1 => self.sector0[16..32].copy_from_slice(&data),
+                2 => self.sector0[32..48].copy_from_slice(&data),
+                3 => self.sector0[48..64].copy_from_slice(&data),
+                64 => self.sector16[0..16].copy_from_slice(&data),
+                65 => self.sector16[16..32].copy_from_slice(&data),
+                66 => self.sector16[32..48].copy_from_slice(&data),
+                67 => self.sector16[48..64].copy_from_slice(&data),
+                _ => panic!("Unexpected block write"),
+            };
+
+            Ok(())
+        }
+    }
+
     struct MockKeyProvider<'a> {
         key_type: KeyType,
         key: &'a [u8; 6],
@@ -432,6 +652,11 @@ mod test {
     const DEFAULT_READ_KEY_PROVIDER: MockKeyProvider = MockKeyProvider {
         key_type: KeyType::KeyA,
         key: TEST_MAD_A_KEY,
+    };
+
+    const DEFAULT_WRITE_KEY_PROVIDER: MockKeyProvider = MockKeyProvider {
+        key_type: KeyType::KeyB,
+        key: TEST_MAD_B_KEY,
     };
 
     trait SectorHelpers {
@@ -684,7 +909,7 @@ mod test {
 
         for cps in 0x01..=0x027 {
             // Skip MADv2 sector.
-            if (cps == 0x10) {
+            if cps == 0x10 {
                 continue;
             }
 
@@ -883,7 +1108,7 @@ mod test {
             assert_eq!(i as usize - 1, apps.len());
 
             for j in 1u8..=i {
-                if (j == 16) {
+                if j == 16 {
                     continue;
                 }
                 let sector = NonMadSector::try_from(Sector::try_from(j).unwrap()).unwrap();
@@ -991,118 +1216,73 @@ mod test {
         }
     }
 
-    //
-    //   #[test]
-    //   fun `mad v1 should write correctly`() {
-    //     val mad =
-    //         MifareApplicationDirectory.create(
-    //             true,
-    //             1u,
-    //             null,
-    //             mapOf(
-    //                 14 to MadAid.fromRaw(0x4811u),
-    //                 15 to MadAid.fromRaw(0x4812u),
-    //             ))
-    //
-    //     val tag = mockk<MifareClassic>()
-    //     every { tag.authenticateSector(any(), any(), any()) } just runs
-    //     every { tag.writeBlock(any(), any()) } just runs
-    //
-    //     mad.writeToMifareClassic(tag, defaultWriteKeyProvider)
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyB, MifareKeyType.KeyB)
-    //       tag.writeBlock(1, validSector0.sliceArray(16..31))
-    //       tag.writeBlock(2, validSector0.sliceArray(32..47))
-    //       tag.writeBlock(
-    //           3,
-    //           ubyteArrayOf(
-    //               0xA0u,
-    //               0xA1u,
-    //               0xA2u,
-    //               0xA3u,
-    //               0xA4u,
-    //               0xA5u,
-    //               0x78u,
-    //               0x77u,
-    //               0x88u,
-    //               0xC1u,
-    //               0xB0u,
-    //               0xB1u,
-    //               0xB2u,
-    //               0xB3u,
-    //               0xB4u,
-    //               0xB5u))
-    //     }
-    //
-    //     confirmVerified(tag)
-    //   }
-    //
-    //   #[test]
-    //   fun `mad v2 should write correctly`() {
-    //     val mad =
-    //         MifareApplicationDirectory.create(
-    //             true,
-    //             2u,
-    //             null,
-    //             (1..39)
-    //                 .filter { it != 16 }
-    //                 .associateWith { MadAid.fromRaw(it.toUByte().inv(), it.toUByte()) })
-    //
-    //     val tag = mockk<MifareClassic>()
-    //     every { tag.authenticateSector(any(), any(), any()) } just runs
-    //     every { tag.writeBlock(any(), any()) } just runs
-    //
-    //     mad.writeToMifareClassic(tag, defaultWriteKeyProvider)
-    //
-    //     verifySequence {
-    //       tag.authenticateSector(0, madKeyB, MifareKeyType.KeyB)
-    //       tag.writeBlock(1, validSector0MoreAids.sliceArray(16..31))
-    //       tag.writeBlock(2, validSector0MoreAids.sliceArray(32..47))
-    //       tag.writeBlock(
-    //           3,
-    //           ubyteArrayOf(
-    //               0xA0u,
-    //               0xA1u,
-    //               0xA2u,
-    //               0xA3u,
-    //               0xA4u,
-    //               0xA5u,
-    //               0x78u,
-    //               0x77u,
-    //               0x88u,
-    //               0xC2u,
-    //               0xB0u,
-    //               0xB1u,
-    //               0xB2u,
-    //               0xB3u,
-    //               0xB4u,
-    //               0xB5u))
-    //       tag.authenticateSector(16, madKeyB, MifareKeyType.KeyB)
-    //       tag.writeBlock(MifareClassic.sectorToBlock(16, 0), validSector16.sliceArray(0..15))
-    //       tag.writeBlock(MifareClassic.sectorToBlock(16, 1), validSector16.sliceArray(16..31))
-    //       tag.writeBlock(MifareClassic.sectorToBlock(16, 2), validSector16.sliceArray(32..47))
-    //       tag.writeBlock(
-    //           MifareClassic.sectorToBlock(16, 3),
-    //           ubyteArrayOf(
-    //               0xA0u,
-    //               0xA1u,
-    //               0xA2u,
-    //               0xA3u,
-    //               0xA4u,
-    //               0xA5u,
-    //               0x78u,
-    //               0x77u,
-    //               0x88u,
-    //               0xC2u,
-    //               0xB0u,
-    //               0xB1u,
-    //               0xB2u,
-    //               0xB3u,
-    //               0xB4u,
-    //               0xB5u))
-    //     }
-    //
-    //     confirmVerified(tag)
-    //   }
+    #[test]
+    fn mad_v1_write() {
+        let apps: LinearMap<NonMadSector, MadAid, 38> = [(14u8, 0x4811u16), (15u8, 0x4812u16)]
+            .into_iter()
+            .map(|(s, a)| {
+                (
+                    NonMadSector::try_from(Sector::try_from(s).unwrap()).unwrap(),
+                    MadAid::try_from_u16(a).unwrap(),
+                )
+            })
+            .collect();
+
+        let mad = MifareApplicationDirectory::new(true, MadVersion::V1, None, apps).unwrap();
+
+        let mut tag = MockWritableClassic1k {
+            authenticated: false,
+            key: TEST_MAD_B_KEY,
+            sector0: [0u8; 64],
+        };
+
+        mad.write_to_tag(&mut tag, &DEFAULT_WRITE_KEY_PROVIDER)
+            .unwrap();
+
+        let mut expected_sector = VALID_SECTOR_0.clone();
+        expected_sector[0..16].copy_from_slice(&[0u8; 16]); // Zero manufacturer block 0 to ignore UID and stuff.
+        expected_sector[48..54].copy_from_slice(TEST_MAD_A_KEY); // Insert key A which is expected to be written.
+        expected_sector[58..64].copy_from_slice(TEST_MAD_B_KEY); // Insert key B which is expected to be written.
+
+        assert!(expected_sector.eq(&tag.sector0));
+    }
+
+    #[test]
+    fn mad_v2_write() {
+        let apps: LinearMap<NonMadSector, MadAid, 38> = (1..=39)
+            .into_iter()
+            .filter(|x| *x != 16)
+            .map(|i| {
+                (
+                    NonMadSector::try_from(Sector::try_from(i).unwrap()).unwrap(),
+                    MadAid::try_from_u8(!i, i).unwrap(),
+                )
+            })
+            .collect();
+
+        let mad = MifareApplicationDirectory::new(true, MadVersion::V2, None, apps).unwrap();
+
+        let mut tag = MockWritableClassic4k {
+            authenticated0: false,
+            authenticated16: false,
+            key: TEST_MAD_B_KEY,
+            sector0: [0u8; 64],
+            sector16: [0u8; 64],
+        };
+
+        mad.write_to_tag(&mut tag, &DEFAULT_WRITE_KEY_PROVIDER)
+            .unwrap();
+
+        let mut expected_sector_0 = VALID_SECTOR_0_MORE_APPS.to_mad_v2().clone();
+        expected_sector_0[0..16].copy_from_slice(&[0u8; 16]); // Zero manufacturer block 0 to ignore UID and stuff.
+        expected_sector_0[48..54].copy_from_slice(TEST_MAD_A_KEY); // Insert key A which is expected to be written.
+        expected_sector_0[58..64].copy_from_slice(TEST_MAD_B_KEY); // Insert key B which is expected to be written.
+
+        let mut expected_sector_16 = VALID_SECTOR_16.clone();
+        expected_sector_16[48..54].copy_from_slice(TEST_MAD_A_KEY); // Insert key A which is expected to be written.
+        expected_sector_16[58..64].copy_from_slice(TEST_MAD_B_KEY); // Insert key B which is expected to be written.
+
+        assert!(expected_sector_0.eq(&tag.sector0));
+        assert!(expected_sector_16.eq(&tag.sector16));
+    }
 }
