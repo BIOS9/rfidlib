@@ -1,7 +1,6 @@
-use std::ffi::CString;
-
 use crate::smart_card::{Error, SmartCard, SmartCardContext};
 use pcsc::{Protocols, ShareMode};
+use std::ffi::CString;
 
 pub struct SmartCardReader<'a> {
     pub name: String,

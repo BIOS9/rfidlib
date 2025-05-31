@@ -1,3 +1,4 @@
+use gallagher_rfid_core::mifare::application_directory::MadAid;
 use gallagher_rfid_core::mifare::{
     application_directory::MifareApplicationDirectory,
     classic::{KeyProvider, KeyType, Tag},
@@ -44,6 +45,35 @@ fn main() {
 
     let mad = MifareApplicationDirectory::read_from_tag(&mut acr122u_card, &SimpleKeyProvider {})
         .unwrap();
+
+    println!("Valid MADv{}", mad.mad_version as u8);
+    for (sector, app) in mad.iter_applications() {
+        match app {
+            MadAid::CardAdministration(admin_code) => {
+                println!(
+                    "Sector: {}, Administration code: {}",
+                    u8::from(sector),
+                    admin_code as u8
+                );
+            }
+            MadAid::Application(fc, app) => {
+                println!(
+                    "Sector: {}, App: FC: {}, App: {}",
+                    u8::from(sector),
+                    fc as u8,
+                    app
+                );
+            }
+            MadAid::Reserved(fc, app) => {
+                println!(
+                    "Sector: {}, Reserved: A: {}, B: {}",
+                    u8::from(sector),
+                    fc,
+                    app
+                );
+            }
+        }
+    }
 
     // let sector = FourBlockSector::S1;
     // acr122u_card
