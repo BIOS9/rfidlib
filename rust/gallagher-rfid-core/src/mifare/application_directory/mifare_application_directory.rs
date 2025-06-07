@@ -1,9 +1,15 @@
+/// Mifare Application Directory (MAD) newtype validation wrapper for sectors that do not contain MAD data.
+///
+/// Based on:
+/// - [Proxmark3 MAD implementation](https://github.com/RfidResearchGroup/proxmark3/blob/master/client/src/mifare/mad.c)
+/// - [NXP Application Note AN10787](https://www.nxp.com/docs/en/application-note/AN10787.pdf)
 use super::mad_application_id::{AdministrationCode, MadAid, MadAidError};
 use crate::mifare::application_directory::non_mad_sector::NonMadSector;
 use crate::mifare::classic::{
     Error, FourBlockOffset, FourBlockSector, KeyProvider, Sector, SixteenBlockSector, Tag,
 };
 use heapless::{LinearMap, Vec};
+
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -274,12 +280,21 @@ impl MifareApplicationDirectory {
         let mut data = [0u8; 48];
 
         // Info byte is Card Publisher Sector or zero if that's absent.
-        let info_byte = if let Some(cps) = self.card_publisher_sector {
-            cps.into()
+        let info_byte_v1 = if let Some(cps) = self.card_publisher_sector {
+            // The maximum sector for a valid V1 MAD.
+            let max_v1_sector = FourBlockSector::S15 as u8;
+            let cps_sector = u8::from(cps);
+
+            // If CPS is not valid for MADv1, set it to 0.
+            if cps_sector > max_v1_sector {
+                0u8
+            } else {
+                cps.into()
+            }
         } else {
             0u8
         };
-        data[1] = info_byte;
+        data[1] = info_byte_v1;
 
         // Application bytes, 15 apps with two bytes each = 30 bytes.
         let free_aid = MadAid::CardAdministration(AdministrationCode::Free);
@@ -336,7 +351,14 @@ impl MifareApplicationDirectory {
             let mut data = [0u8; 64];
 
             // Write info byte to second byte in sector.
-            data[1] = info_byte;
+            // Info byte is Card Publisher Sector or zero if that's absent.
+            let info_byte_v2 = if let Some(cps) = self.card_publisher_sector {
+                // The maximum sector for a valid V1 MAD.
+                cps.into()
+            } else {
+                0u8
+            };
+            data[1] = info_byte_v2;
 
             // Application bytes, 15 apps with two bytes each = 30 bytes.
             let free_aid = MadAid::CardAdministration(AdministrationCode::Free);
