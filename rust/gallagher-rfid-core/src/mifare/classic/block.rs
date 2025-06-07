@@ -13,6 +13,13 @@ pub enum FourBlockOffset {
 }
 
 impl FourBlockOffset {
+    pub const ALL: [FourBlockOffset; 4] = [
+        FourBlockOffset::B0,
+        FourBlockOffset::B1,
+        FourBlockOffset::B2,
+        FourBlockOffset::B3,
+    ];
+
     /// Converts a u8 block index into a `FourBlockOffset` enum variant.
     ///
     /// # Panics
@@ -21,6 +28,10 @@ impl FourBlockOffset {
         assert!(block <= Self::B3 as u8);
         // SAFETY: Block value bounds checked by assertion.
         unsafe { transmute(block) }
+    }
+
+    pub fn iter() -> core::slice::Iter<'static, Self> {
+        Self::ALL.iter()
     }
 }
 
@@ -59,6 +70,25 @@ pub enum SixteenBlockOffset {
 }
 
 impl SixteenBlockOffset {
+    pub const ALL: [SixteenBlockOffset; 16] = [
+        SixteenBlockOffset::B0,
+        SixteenBlockOffset::B1,
+        SixteenBlockOffset::B2,
+        SixteenBlockOffset::B3,
+        SixteenBlockOffset::B4,
+        SixteenBlockOffset::B5,
+        SixteenBlockOffset::B6,
+        SixteenBlockOffset::B7,
+        SixteenBlockOffset::B8,
+        SixteenBlockOffset::B9,
+        SixteenBlockOffset::B10,
+        SixteenBlockOffset::B11,
+        SixteenBlockOffset::B12,
+        SixteenBlockOffset::B13,
+        SixteenBlockOffset::B14,
+        SixteenBlockOffset::B15,
+    ];
+
     /// Converts a u8 block index into a `SixteenBlockOffset` enum variant.
     ///
     /// # Panics
@@ -67,6 +97,10 @@ impl SixteenBlockOffset {
         assert!(block <= Self::B15 as u8);
         // SAFETY: Block value bounds checked by assertion.
         unsafe { transmute(block) }
+    }
+
+    pub fn iter() -> core::slice::Iter<'static, Self> {
+        Self::ALL.iter()
     }
 }
 
@@ -285,5 +319,53 @@ mod test {
             let result = SixteenBlockOffset::try_from(i);
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn all_four_block_offset() {
+        for i in 0u8..4u8 {
+            assert_eq!(
+                FourBlockOffset::ALL[i as usize],
+                FourBlockOffset::from_u8(i)
+            );
+        }
+    }
+
+    #[test]
+    fn all_sixteen_block_offset() {
+        for i in 0u8..16u8 {
+            assert_eq!(
+                SixteenBlockOffset::ALL[i as usize],
+                SixteenBlockOffset::from_u8(i)
+            );
+        }
+    }
+
+    #[test]
+    fn four_block_offset_iter() {
+        let mut expected_value = 0u8;
+        for variant in FourBlockOffset::iter() {
+            assert_eq!(
+                *variant as u8, expected_value,
+                "Unexpected variant at index {}",
+                expected_value
+            );
+            expected_value += 1;
+        }
+        assert_eq!(expected_value, 4, "Expected 4 variants total");
+    }
+
+    #[test]
+    fn sixteen_block_offset_iter() {
+        let mut expected_value = 0u8;
+        for variant in SixteenBlockOffset::iter() {
+            assert_eq!(
+                *variant as u8, expected_value,
+                "Unexpected variant at index {}",
+                expected_value
+            );
+            expected_value += 1;
+        }
+        assert_eq!(expected_value, 16, "Expected 16 variants total");
     }
 }

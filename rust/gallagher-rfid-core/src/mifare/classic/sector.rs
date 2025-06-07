@@ -46,6 +46,10 @@ impl FourBlockSector {
         Block::from_four_block_sector(*self, offset)
     }
 
+    pub fn iter_blocks(&self) -> impl Iterator<Item = Block> + use<'_> {
+        FourBlockOffset::iter().map(|offset| self.block(*offset))
+    }
+
     /// Iterate every FourBlockSector from S0 to S31 (inclusive).
     pub fn iter() -> impl Iterator<Item = FourBlockSector> {
         (0u8..=31).filter_map(|s| FourBlockSector::try_from(s).ok())
@@ -93,6 +97,10 @@ impl SixteenBlockSector {
     /// Gets the specified block offset from the current sector.
     pub fn block(&self, offset: SixteenBlockOffset) -> Block {
         Block::from_sixteen_block_sector(*self, offset)
+    }
+
+    pub fn iter_blocks(&self) -> impl Iterator<Item = Block> + use<'_> {
+        SixteenBlockOffset::iter().map(|offset| self.block(*offset))
     }
 
     /// Iterate every SixteenBlockSector from S32 to S39 (inclusive).
@@ -430,5 +438,29 @@ mod test {
 
         assert_eq!(all.len(), 40);
         assert_eq!(all, (0u8..=39).collect::<Vec<u8, 40>>());
+    }
+
+    #[test]
+    fn four_block_sector_iterates_all_blocks() {
+        for i in 0u8..=31u8 {
+            let sector = FourBlockSector::from_u8(i);
+            let all: Vec<u8, 4> = sector.iter_blocks().map(|s| s.into()).collect();
+            assert_eq!(all.len(), 4);
+            let b_first = i * 4;
+            let b_last = b_first + 3;
+            assert_eq!(all, (b_first..=b_last).collect::<Vec<u8, 4>>());
+        }
+    }
+
+    #[test]
+    fn sixteen_block_sector_iterates_all_blocks() {
+        for i in 32u8..=39u8 {
+            let sector = SixteenBlockSector::from_u8(i);
+            let all: Vec<u8, 16> = sector.iter_blocks().map(|s| s.into()).collect();
+            assert_eq!(all.len(), 16);
+            let b_first = ((i - 32) * 16) + 128;
+            let b_last = b_first + 15;
+            assert_eq!(all, (b_first..=b_last).collect::<Vec<u8, 16>>());
+        }
     }
 }
