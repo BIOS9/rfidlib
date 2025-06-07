@@ -149,6 +149,16 @@ impl Sector {
             .map(Sector::FourBlock)
             .chain(SixteenBlockSector::iter().map(Sector::SixteenBlock))
     }
+
+    pub fn iter_blocks(&self) -> impl Iterator<Item = Block> + use<'_> {
+        // Have to collect here because each sector.iter_blocks returns a different type.
+        // I cant think of a better way to do this.
+        let blocks: heapless::Vec<Block, 32> = match self {
+            Sector::FourBlock(sector) => sector.iter_blocks().collect(),
+            Sector::SixteenBlock(sector) => sector.iter_blocks().collect(),
+        };
+        blocks.into_iter()
+    }
 }
 
 impl fmt::Display for Sector {
@@ -456,6 +466,30 @@ mod test {
     fn sixteen_block_sector_iterates_all_blocks() {
         for i in 32u8..=39u8 {
             let sector = SixteenBlockSector::from_u8(i);
+            let all: Vec<u8, 16> = sector.iter_blocks().map(|s| s.into()).collect();
+            assert_eq!(all.len(), 16);
+            let b_first = ((i - 32) * 16) + 128;
+            let b_last = b_first + 15;
+            assert_eq!(all, (b_first..=b_last).collect::<Vec<u8, 16>>());
+        }
+    }
+
+    #[test]
+    fn sector_iterates_all_four_blocks() {
+        for i in 0u8..=31u8 {
+            let sector: Sector = FourBlockSector::from_u8(i).into();
+            let all: Vec<u8, 4> = sector.iter_blocks().map(|s| s.into()).collect();
+            assert_eq!(all.len(), 4);
+            let b_first = i * 4;
+            let b_last = b_first + 3;
+            assert_eq!(all, (b_first..=b_last).collect::<Vec<u8, 4>>());
+        }
+    }
+
+    #[test]
+    fn sector_iterates_all_sixteen_blocks() {
+        for i in 32u8..=39u8 {
+            let sector: Sector = SixteenBlockSector::from_u8(i).into();
             let all: Vec<u8, 16> = sector.iter_blocks().map(|s| s.into()).collect();
             assert_eq!(all.len(), 16);
             let b_first = ((i - 32) * 16) + 128;
