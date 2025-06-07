@@ -3,7 +3,7 @@ use crate::mifare::application_directory::non_mad_sector::NonMadSector;
 use crate::mifare::classic::{
     Error, FourBlockOffset, FourBlockSector, KeyProvider, Sector, SixteenBlockSector, Tag,
 };
-use heapless::LinearMap;
+use heapless::{LinearMap, Vec};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -44,12 +44,15 @@ impl MifareApplicationDirectory {
     /// Key A read, Key B read/write all blocks.
     pub const MAD_ACCESS_BITS: [u8; 3] = [0x78, 0x77, 0x88];
 
-    pub fn new(
+    pub fn new<I>(
         multi_application_card: bool,
         mad_version: MadVersion,
         card_publisher_sector: Option<NonMadSector>,
-        applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT>,
-    ) -> Result<Self, MadError> {
+        applications: I,
+    ) -> Result<Self, MadError>
+    where
+        I: IntoIterator<Item = (NonMadSector, MadAid)>,
+    {
         // Spec says MADv1 in sector 0 is 4 bytes, and can only point to 15 sectors (excluding
         // sector 0 since that means the value is absent).
         if let Some(cps) = card_publisher_sector {
@@ -68,15 +71,15 @@ impl MifareApplicationDirectory {
         // Filter out free applications,
         // sectors without an app are implicitly free.
         let applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT> = applications
-            .iter()
-            .filter(|a| *a.1 != MadAid::CardAdministration(AdministrationCode::Free))
-            .map(|(&sector, &aid)| (sector, aid))
+            .into_iter()
+            .filter(|(_, aid)| *aid != MadAid::CardAdministration(AdministrationCode::Free))
+            .map(|(sector, aid)| (sector.into(), aid.into()))
             .collect();
 
         // Max sector 15 for MADv1, sector 39 for MADv2.
         if mad_version == MadVersion::V1 {
             if let Some((&sector, _)) = applications
-                .iter()
+                .into_iter()
                 .find(|(&sector, _)| u8::from(sector) > max_application_sector)
             {
                 return Err(MadError::InvalidApplicationSectorForMadV1(sector.into()));
@@ -150,7 +153,7 @@ impl MifareApplicationDirectory {
         };
 
         // Parse card applications for MADv1.
-        let mut applications: LinearMap<NonMadSector, MadAid, MAX_AID_COUNT> = LinearMap::new();
+        let mut applications: Vec<(NonMadSector, MadAid), MAX_AID_COUNT> = Vec::new();
         // Skip the CRC and info byte, and break into 2 byte chunks.
         for (i, chunk) in mad_v1_data[2..].chunks(2).enumerate() {
             let arr: [u8; 2] = match chunk.try_into() {
@@ -171,8 +174,8 @@ impl MifareApplicationDirectory {
                     .map_err(|_| MadError::InvalidApplicationSector(sector))?;
 
                 // It should not be possible to end up with duplicate sectors in this map since we're enumerating over a range.
-                if let Err(_) = applications.insert(non_mad, aid) {
-                    unreachable!("Sector already exists in AID map.")
+                if let Err(_) = applications.push((non_mad, aid)) {
+                    unreachable!("AID vector full.")
                 }
             }
         }
@@ -234,8 +237,8 @@ impl MifareApplicationDirectory {
                         .map_err(|_| MadError::InvalidApplicationSector(sector))?;
 
                     // It should not be possible to end up with duplicate sectors in this map since we're enumerating over a range.
-                    if let Err(_) = applications.insert(non_mad, aid) {
-                        unreachable!("Sector already exists in AID map.")
+                    if let Err(_) = applications.push((non_mad, aid)) {
+                        unreachable!("AID vector full.")
                     }
                 }
             }
@@ -443,7 +446,7 @@ mod test {
     use crate::mifare::classic::{
         Block, Error, FourBlockSector, KeyProvider, KeyType, Sector, Tag,
     };
-    use heapless::LinearMap;
+    use heapless::{LinearMap, Vec};
 
     struct MockClassic1k<'a> {
         key: &'a [u8; 6],
@@ -1016,31 +1019,15 @@ mod test {
 
     #[test]
     fn create_mad() {
-        _ = MifareApplicationDirectory::new(true, MadVersion::V1, None, LinearMap::default())
-            .unwrap();
-        _ = MifareApplicationDirectory::new(false, MadVersion::V1, None, LinearMap::default())
-            .unwrap();
-        _ = MifareApplicationDirectory::new(false, MadVersion::V2, None, LinearMap::default())
-            .unwrap();
-        _ = MifareApplicationDirectory::new(true, MadVersion::V2, None, LinearMap::default())
-            .unwrap();
+        _ = MifareApplicationDirectory::new(true, MadVersion::V1, None, []).unwrap();
+        _ = MifareApplicationDirectory::new(false, MadVersion::V1, None, []).unwrap();
+        _ = MifareApplicationDirectory::new(false, MadVersion::V2, None, []).unwrap();
+        _ = MifareApplicationDirectory::new(true, MadVersion::V2, None, []).unwrap();
 
         for cps in 1u8..=15 {
             let cps = NonMadSector::try_from(Sector::try_from(cps).unwrap()).unwrap();
-            _ = MifareApplicationDirectory::new(
-                true,
-                MadVersion::V1,
-                Some(cps),
-                LinearMap::default(),
-            )
-            .unwrap();
-            _ = MifareApplicationDirectory::new(
-                false,
-                MadVersion::V1,
-                Some(cps),
-                LinearMap::default(),
-            )
-            .unwrap();
+            _ = MifareApplicationDirectory::new(true, MadVersion::V1, Some(cps), []).unwrap();
+            _ = MifareApplicationDirectory::new(false, MadVersion::V1, Some(cps), []).unwrap();
         }
 
         for cps in 1u8..=39 {
@@ -1048,27 +1035,15 @@ mod test {
                 continue; // Skip MADv2 sector.
             }
             let cps = NonMadSector::try_from(Sector::try_from(cps).unwrap()).unwrap();
-            _ = MifareApplicationDirectory::new(
-                true,
-                MadVersion::V2,
-                Some(cps),
-                LinearMap::default(),
-            )
-            .unwrap();
-            _ = MifareApplicationDirectory::new(
-                false,
-                MadVersion::V2,
-                Some(cps),
-                LinearMap::default(),
-            )
-            .unwrap();
+            _ = MifareApplicationDirectory::new(true, MadVersion::V2, Some(cps), []).unwrap();
+            _ = MifareApplicationDirectory::new(false, MadVersion::V2, Some(cps), []).unwrap();
         }
     }
 
     #[test]
     fn create_mad_v1_with_apps() {
         for i in 1u8..=15 {
-            let apps = (1u8..=i)
+            let apps: Vec<(NonMadSector, MadAid), 38> = (1u8..=i)
                 .into_iter()
                 .map(|x| {
                     (
@@ -1092,7 +1067,7 @@ mod test {
     #[test]
     fn create_mad_v2_with_apps() {
         for i in 17u8..=39 {
-            let apps = (1u8..=i)
+            let apps: Vec<(NonMadSector, MadAid), 38> = (1u8..=i)
                 .into_iter()
                 .filter(|x| *x != 16)
                 .map(|x| {
@@ -1126,12 +1101,7 @@ mod test {
 
             let sector = Sector::try_from(i).unwrap();
             let cps = NonMadSector::try_from(sector).unwrap();
-            let result = MifareApplicationDirectory::new(
-                true,
-                MadVersion::V1,
-                Some(cps),
-                LinearMap::default(),
-            );
+            let result = MifareApplicationDirectory::new(true, MadVersion::V1, Some(cps), []);
 
             match result {
                 Ok(_) => panic!("Expected MADv1 CPS error"),
@@ -1149,14 +1119,13 @@ mod test {
             let sector = Sector::try_from(i).unwrap();
             let app_sector = NonMadSector::try_from(sector).unwrap();
 
-            let mut apps = LinearMap::new();
-            let result = apps.insert(
+            let mut apps: Vec<(NonMadSector, MadAid), 38> = Vec::new();
+            let result = apps.push((
                 app_sector,
                 MadAid::CardAdministration(AdministrationCode::AdditionalDirectoryInfo),
-            );
+            ));
             match result {
-                Ok(None) => {}
-                Ok(Some(_)) => panic!("Insert should succeed"),
+                Ok(()) => {}
                 Err(_) => panic!("Insert should succeed"),
             }
 
@@ -1178,7 +1147,7 @@ mod test {
                 continue;
             }
 
-            let apps = (1u8..=i)
+            let apps: Vec<(NonMadSector, MadAid), 38> = (1u8..=i)
                 .into_iter()
                 .map(|x| {
                     (
@@ -1200,7 +1169,7 @@ mod test {
                 continue;
             }
 
-            let apps = (1u8..=i)
+            let apps: Vec<(NonMadSector, MadAid), 38> = (1u8..=i)
                 .into_iter()
                 .filter(|x| *x != 16)
                 .map(|x| {
@@ -1218,7 +1187,7 @@ mod test {
 
     #[test]
     fn mad_v1_write() {
-        let apps: LinearMap<NonMadSector, MadAid, 38> = [(14u8, 0x4811u16), (15u8, 0x4812u16)]
+        let apps: Vec<(NonMadSector, MadAid), 38> = [(14u8, 0x4811u16), (15u8, 0x4812u16)]
             .into_iter()
             .map(|(s, a)| {
                 (
@@ -1249,7 +1218,7 @@ mod test {
 
     #[test]
     fn mad_v2_write() {
-        let apps: LinearMap<NonMadSector, MadAid, 38> = (1..=39)
+        let apps: Vec<(NonMadSector, MadAid), 38> = (1..=39)
             .into_iter()
             .filter(|x| *x != 16)
             .map(|i| {

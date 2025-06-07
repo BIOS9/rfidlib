@@ -5,7 +5,7 @@ use crate::mifare::classic::Sector;
 /// Based on:
 /// - [Proxmark3 MAD implementation](https://github.com/RfidResearchGroup/proxmark3/blob/master/client/src/mifare/mad.c)
 /// - [NXP Application Note AN10787](https://www.nxp.com/docs/en/application-note/AN10787.pdf)
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct NonMadSector(Sector);
 
 impl NonMadSector {

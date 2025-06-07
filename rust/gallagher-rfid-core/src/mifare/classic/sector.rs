@@ -3,7 +3,7 @@ use core::{fmt, mem::transmute};
 use crate::mifare::classic::{Block, Error, FourBlockOffset, SixteenBlockOffset};
 
 /// Represents a valid MIFARE Classic 4 block sector index from 0 to 31.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 #[repr(u8)]
 pub enum FourBlockSector {
     S0 = 0,
@@ -80,7 +80,7 @@ impl TryFrom<u8> for FourBlockSector {
 }
 
 /// Represents a valid MIFARE Classic 16 block sector index from 32 to 39.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 #[repr(u8)]
 pub enum SixteenBlockSector {
     S32 = 32,
@@ -134,7 +134,7 @@ impl TryFrom<u8> for SixteenBlockSector {
 }
 
 /// Represents a MIFARE Classic sector of either four or sixteen blocks.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Sector {
     FourBlock(FourBlockSector),       // 0..=31
     SixteenBlock(SixteenBlockSector), // 32..=39
