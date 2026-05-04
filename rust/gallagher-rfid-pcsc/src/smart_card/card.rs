@@ -15,7 +15,7 @@ impl SmartCard {
             .pcsc_card
             .get_attribute_owned(pcsc::Attribute::VendorName);
         match result {
-            Ok(v) => Ok(String::from_utf8_lossy(&v).to_string()),
+            Ok(v) => Ok(String::from_utf8_lossy(&v).trim_end_matches('\0').to_string()),
             Err(err) => Err(Error::CardCommunicateFailed(format!(
                 "Failed to query reader vendor: {}",
                 err
