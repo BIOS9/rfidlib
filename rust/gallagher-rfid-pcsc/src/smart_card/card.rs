@@ -1,5 +1,5 @@
 use crate::smart_card::Error;
-use pcsc::{Card, MAX_BUFFER_SIZE};
+use pcsc::{Card, MAX_BUFFER_SIZE, ffi::DWORD};
 
 pub struct SmartCard {
     pcsc_card: Card,
@@ -23,7 +23,7 @@ impl SmartCard {
         }
     }
 
-    pub fn control(&mut self, control_code: u32, command: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn control(&mut self, control_code: DWORD, command: &[u8]) -> Result<Vec<u8>, Error> {
         let mut response_buff = [0; MAX_BUFFER_SIZE];
         match self
             .pcsc_card

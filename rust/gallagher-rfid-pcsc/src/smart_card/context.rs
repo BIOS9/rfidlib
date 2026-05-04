@@ -19,7 +19,7 @@ impl SmartCardContext {
         }
     }
 
-    pub fn get_readers(&self) -> Result<impl Iterator<Item = SmartCardReader>, Error> {
+    pub fn get_readers(&self) -> Result<impl Iterator<Item = SmartCardReader<'_>>, Error> {
         let reader_c_names = self
             .pcsc_context
             .list_readers_owned()
