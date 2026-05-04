@@ -214,7 +214,7 @@ mod test {
 
         for i in 0u8..=31 {
             let s = FourBlockSector::try_from(i).unwrap();
-            for j in 0u8..=4 {
+            for j in 0u8..=3 {
                 let o = unsafe { transmute(j) };
                 let b = Block::from_four_block_sector(s, o);
                 assert_eq!(i * 4 + j, b.0);
