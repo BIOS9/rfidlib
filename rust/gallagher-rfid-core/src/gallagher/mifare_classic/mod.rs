@@ -200,4 +200,3 @@ fn read_credential_sector<T: Tag>(
         Error::InvalidCredential(u8::from(Block::from(sector)) / 4)
     })
 }
-
