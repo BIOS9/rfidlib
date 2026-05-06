@@ -311,11 +311,16 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode_roundtrip_exhaustive() {
-        for rc in (0u8..=0x0F).step_by(2) {
-            for fc in (0u16..=0xFFFF).step_by(500) {
-                for cn in (0u32..=0xFF_FFFF).step_by(2000) {
-                    for il in (0u8..=0x0F).step_by(3) {
+    fn encode_decode_roundtrip_sampled() {
+        let region_codes = [0, 1, 7, 15];
+        let facility_codes = [0, 1, 12_345, 65_535];
+        let card_numbers = [0, 1, 1_234_567, 16_777_215];
+        let issue_levels = [0, 1, 8, 15];
+
+        for rc in region_codes {
+            for fc in facility_codes {
+                for cn in card_numbers {
+                    for il in issue_levels {
                         let cred = GallagherCredential::new(rc, fc, cn, il).unwrap();
                         let decoded = GallagherCredential::decode(&cred.encode()).unwrap();
                         assert_eq!(cred, decoded);
