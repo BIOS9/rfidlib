@@ -14,8 +14,11 @@ pub enum Key {
 pub struct KeyNumber(u8);
 
 impl KeyNumber {
-    /// `DESFire` key numbers are four bits in the common command encoding.
-    pub const MAX: u8 = 0x0F;
+    /// Highest regular `DESFire` key number.
+    ///
+    /// Access-condition nibbles reserve `0x0E` for free access and `0x0F` for
+    /// no access.
+    pub const MAX: u8 = 0x0D;
 
     /// Creates a validated key number.
     pub fn new(value: u8) -> Result<Self, Error> {
