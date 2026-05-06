@@ -14,9 +14,12 @@ pub struct CommandCode(u8);
 
 impl CommandCode {
     pub const ADDITIONAL_FRAME: Self = Self(0xAF);
+    pub const GET_KEY_SETTINGS: Self = Self(0x45);
+    pub const GET_KEY_VERSION: Self = Self(0x64);
     pub const GET_VERSION: Self = Self(0x60);
     pub const GET_APPLICATION_IDS: Self = Self(0x6A);
     pub const SELECT_APPLICATION: Self = Self(0x5A);
+    pub const FREE_MEM: Self = Self(0x6E);
     pub const GET_FILE_IDS: Self = Self(0x6F);
     pub const GET_FILE_SETTINGS: Self = Self(0xF5);
     pub const READ_DATA: Self = Self(0xBD);
