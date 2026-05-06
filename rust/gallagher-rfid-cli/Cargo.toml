@@ -9,3 +9,4 @@ workspace = true
 [dependencies]
 gallagher-rfid-pcsc = { path = "../gallagher-rfid-pcsc" }
 gallagher-rfid-core = { path = "../gallagher-rfid-core" }
+heapless = { workspace = true }

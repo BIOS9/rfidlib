@@ -11,4 +11,4 @@ default = ["std"]
 std = []
 
 [dependencies]
-heapless = "0.9.3"
+heapless = { workspace = true }
