@@ -394,11 +394,14 @@ fn validate_encrypted_read_plaintext_len(
 }
 
 fn has_valid_encrypted_response_padding(padding: &[u8]) -> bool {
+    // DESFire EV1 emits method 2 (0x80 followed by zeros) when the payload length
+    // is implicit (length=0 read) and method 1 (all zeros) when an exact length is
+    // requested. Accept both so explicit-length encrypted reads validate.
     let Some((&first, rest)) = padding.split_first() else {
         return true;
     };
 
-    first == 0x80 && rest.iter().all(|&byte| byte == 0)
+    (first == 0x80 || first == 0x00) && rest.iter().all(|&byte| byte == 0)
 }
 
 fn parse_application_ids<const N: usize>(
