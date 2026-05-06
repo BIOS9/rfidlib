@@ -28,13 +28,12 @@ impl Acr122uCard {
 
         let response = self.smart_card.transmit_apdu(&beep_apdu)?;
 
-        return match response.as_slice() {
+        match response.as_slice() {
             [0x90, b] if *b == beep_byte => Ok(()),
             _ => Err(smart_card::Error::CardCommunicateFailed(format!(
-                "Failed to disable card detect beep, reader returned: {:02X?}",
-                response
+                "Failed to disable card detect beep, reader returned: {response:02X?}"
             ))),
-        };
+        }
     }
 }
 
@@ -110,8 +109,7 @@ impl Tag for Acr122uCard {
                 block, *sw1, *sw2,
             ))),
             _ => Err(mifare::classic::Error::TransportError(format!(
-                "Invalid response length when reading block {}",
-                block,
+                "Invalid response length when reading block {block}",
             ))),
         }
     }
@@ -129,8 +127,7 @@ impl Tag for Acr122uCard {
                 block, *sw1, *sw2,
             ))),
             _ => Err(mifare::classic::Error::TransportError(format!(
-                "Invalid response when writing block {}",
-                block,
+                "Invalid response when writing block {block}",
             ))),
         }
     }

@@ -3,6 +3,9 @@ name = "gallagher-rfid-pcsc"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [dependencies]
 gallagher-rfid-core = { path = "../gallagher-rfid-core" }
 pcsc = "2.9.0"

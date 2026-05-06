@@ -50,7 +50,7 @@ impl FourBlockSector {
         FourBlockOffset::iter().map(|offset| self.block(*offset))
     }
 
-    /// Iterate every FourBlockSector from S0 to S31 (inclusive).
+    /// Iterate every [`FourBlockSector`] from S0 to S31 (inclusive).
     pub fn iter() -> impl Iterator<Item = FourBlockSector> {
         (0u8..=31).filter_map(|s| FourBlockSector::try_from(s).ok())
     }
@@ -59,10 +59,11 @@ impl FourBlockSector {
     ///
     /// # Panics
     /// This code will panic if `sector` is greater than 31 because there are only 32 four block sectors in MIFARE classic.
+    #[allow(unsafe_code)]
     fn from_u8(sector: u8) -> Self {
         assert!(sector <= Self::S31 as u8);
         // SAFETY: Sector value bounds checked by assertion.
-        unsafe { transmute(sector) }
+        unsafe { transmute::<u8, FourBlockSector>(sector) }
     }
 }
 
@@ -103,20 +104,21 @@ impl SixteenBlockSector {
         SixteenBlockOffset::iter().map(|offset| self.block(*offset))
     }
 
-    /// Iterate every SixteenBlockSector from S32 to S39 (inclusive).
+    /// Iterate every [`SixteenBlockSector`] from S32 to S39 (inclusive).
     pub fn iter() -> impl Iterator<Item = SixteenBlockSector> {
         (32u8..=39).filter_map(|s| SixteenBlockSector::try_from(s).ok())
     }
 
-    /// Converts a u8 sector index into a `FourBlockSector` enum variant.
+    /// Converts a u8 sector index into a `SixteenBlockSector` enum variant.
     ///
     /// # Panics
     /// This code will panic if `sector` is less than 32 or greater than 39 because those are the only sixteen block sectors in MIFARE classic.
+    #[allow(unsafe_code)]
     fn from_u8(sector: u8) -> Self {
         assert!(sector >= Self::S32 as u8);
         assert!(sector <= Self::S39 as u8);
         // SAFETY: Sector value bounds checked by assertions.
-        unsafe { transmute(sector) }
+        unsafe { transmute::<u8, SixteenBlockSector>(sector) }
     }
 }
 
@@ -163,7 +165,8 @@ impl Sector {
 
 impl fmt::Display for Sector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Sector {}", u8::from(*self))
+        let n = u8::from(*self);
+        write!(f, "Sector {n}")
     }
 }
 
@@ -317,8 +320,8 @@ mod test {
         use std::format;
         for i in u8::MIN..=u8::MAX {
             if let Ok(sector) = Sector::try_from(i) {
-                let s = format!("{}", sector);
-                assert_eq!(s, format!("Sector {}", i));
+                let s = format!("{sector}");
+                assert_eq!(s, format!("Sector {i}"));
             }
         }
     }
@@ -331,7 +334,7 @@ mod test {
                 Sector::FourBlock(s) => {
                     assert_eq!(i, s as u8);
                 }
-                _ => panic!("Expected four block sector"),
+                Sector::SixteenBlock(_) => panic!("Expected four block sector"),
             }
         }
     }
@@ -344,7 +347,7 @@ mod test {
                 Sector::SixteenBlock(s) => {
                     assert_eq!(i, s as u8);
                 }
-                _ => panic!("Expected sixteen block sector"),
+                Sector::FourBlock(_) => panic!("Expected sixteen block sector"),
             }
         }
     }
@@ -357,7 +360,7 @@ mod test {
                 Sector::FourBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
-                _ => panic!("Expected four block sector"),
+                Sector::SixteenBlock(_) => panic!("Expected four block sector"),
             }
         }
         for i in 32u8..=39u8 {
@@ -366,7 +369,7 @@ mod test {
                 Sector::SixteenBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
-                _ => panic!("Expected sixteen block sector"),
+                Sector::FourBlock(_) => panic!("Expected sixteen block sector"),
             }
         }
     }
@@ -379,7 +382,7 @@ mod test {
                 Sector::FourBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
-                _ => panic!("Expected four block sector"),
+                Sector::SixteenBlock(_) => panic!("Expected four block sector"),
             }
         }
         for i in 32u8..=39u8 {
@@ -388,7 +391,7 @@ mod test {
                 Sector::SixteenBlock(_) => {
                     assert_eq!(i, u8::from(sector));
                 }
-                _ => panic!("Expected sixteen block sector"),
+                Sector::FourBlock(_) => panic!("Expected sixteen block sector"),
             }
         }
         for i in 40u8..=u8::MAX {
@@ -405,7 +408,7 @@ mod test {
                 Sector::FourBlock(s) => {
                     assert_eq!(u8::from(block) / 4, s as u8);
                 }
-                _ => panic!("Expected four block sector"),
+                Sector::SixteenBlock(_) => panic!("Expected four block sector"),
             }
         }
         for i in 128u8..=u8::MAX {
@@ -415,7 +418,7 @@ mod test {
                 Sector::SixteenBlock(s) => {
                     assert_eq!(((u8::from(block) - 128) / 16) + 32, s as u8);
                 }
-                _ => panic!("Expected sixteen block sector"),
+                Sector::FourBlock(_) => panic!("Expected sixteen block sector"),
             }
         }
     }
@@ -454,7 +457,7 @@ mod test {
     fn four_block_sector_iterates_all_blocks() {
         for i in 0u8..=31u8 {
             let sector = FourBlockSector::from_u8(i);
-            let all: Vec<u8, 4> = sector.iter_blocks().map(|s| s.into()).collect();
+            let all: Vec<u8, 4> = sector.iter_blocks().map(Into::into).collect();
             assert_eq!(all.len(), 4);
             let b_first = i * 4;
             let b_last = b_first + 3;
@@ -466,7 +469,7 @@ mod test {
     fn sixteen_block_sector_iterates_all_blocks() {
         for i in 32u8..=39u8 {
             let sector = SixteenBlockSector::from_u8(i);
-            let all: Vec<u8, 16> = sector.iter_blocks().map(|s| s.into()).collect();
+            let all: Vec<u8, 16> = sector.iter_blocks().map(Into::into).collect();
             assert_eq!(all.len(), 16);
             let b_first = ((i - 32) * 16) + 128;
             let b_last = b_first + 15;
@@ -478,7 +481,7 @@ mod test {
     fn sector_iterates_all_four_blocks() {
         for i in 0u8..=31u8 {
             let sector: Sector = FourBlockSector::from_u8(i).into();
-            let all: Vec<u8, 4> = sector.iter_blocks().map(|s| s.into()).collect();
+            let all: Vec<u8, 4> = sector.iter_blocks().map(Into::into).collect();
             assert_eq!(all.len(), 4);
             let b_first = i * 4;
             let b_last = b_first + 3;
@@ -490,7 +493,7 @@ mod test {
     fn sector_iterates_all_sixteen_blocks() {
         for i in 32u8..=39u8 {
             let sector: Sector = SixteenBlockSector::from_u8(i).into();
-            let all: Vec<u8, 16> = sector.iter_blocks().map(|s| s.into()).collect();
+            let all: Vec<u8, 16> = sector.iter_blocks().map(Into::into).collect();
             assert_eq!(all.len(), 16);
             let b_first = ((i - 32) * 16) + 128;
             let b_last = b_first + 15;

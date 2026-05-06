@@ -13,8 +13,7 @@ impl SmartCardContext {
         match pcsc::Context::establish(pcsc::Scope::User) {
             Ok(pcsc_context) => Ok(SmartCardContext { pcsc_context }),
             Err(err) => Err(Error::ContextInitFailed(format!(
-                "Failed to initialize PCSC smart card context: {}",
-                err
+                "Failed to initialize PCSC smart card context: {err}"
             ))),
         }
     }
@@ -24,7 +23,7 @@ impl SmartCardContext {
             .pcsc_context
             .list_readers_owned()
             .map_err(|err| {
-                Error::ReaderListFailed(format!("Failed to get smart card readers: {}", err))
+                Error::ReaderListFailed(format!("Failed to get smart card readers: {err}"))
             })?
             .into_iter();
 
@@ -32,8 +31,7 @@ impl SmartCardContext {
             .map(|name| {
                 let s = name.to_str().map_err(|err| {
                     Error::ReaderListFailed(format!(
-                        "Failed to convert reader name to valid UTF-8 string: {}",
-                        err
+                        "Failed to convert reader name to valid UTF-8 string: {err}"
                     ))
                 })?;
                 Ok(s.to_owned())

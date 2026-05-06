@@ -5,3 +5,16 @@ members = [
     "gallagher-rfid-pcsc",
     "gallagher-rfid-cli",
 ]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Author decides which return values warrant #[must_use]; don't auto-warn every fn.
+must_use_candidate = "allow"
+too_many_lines = "allow"
+option_if_let_else = "allow"

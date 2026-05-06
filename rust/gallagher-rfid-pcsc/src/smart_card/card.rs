@@ -1,5 +1,5 @@
 use crate::smart_card::Error;
-use pcsc::{Card, MAX_BUFFER_SIZE, ffi::DWORD};
+use pcsc::{ffi::DWORD, Card, MAX_BUFFER_SIZE};
 
 pub struct SmartCard {
     pcsc_card: Card,
@@ -15,10 +15,11 @@ impl SmartCard {
             .pcsc_card
             .get_attribute_owned(pcsc::Attribute::VendorName);
         match result {
-            Ok(v) => Ok(String::from_utf8_lossy(&v).trim_end_matches('\0').to_string()),
+            Ok(v) => Ok(String::from_utf8_lossy(&v)
+                .trim_end_matches('\0')
+                .to_string()),
             Err(err) => Err(Error::CardCommunicateFailed(format!(
-                "Failed to query reader vendor: {}",
-                err
+                "Failed to query reader vendor: {err}"
             ))),
         }
     }
@@ -27,12 +28,11 @@ impl SmartCard {
         let mut response_buff = [0; MAX_BUFFER_SIZE];
         match self
             .pcsc_card
-            .control(control_code, &command, &mut response_buff)
+            .control(control_code, command, &mut response_buff)
         {
             Ok(response) => Ok(response.to_vec()),
             Err(err) => Err(Error::CardCommunicateFailed(format!(
-                "Control command failed: {}",
-                err
+                "Control command failed: {err}"
             ))),
         }
     }
@@ -43,7 +43,7 @@ impl SmartCard {
             .pcsc_card
             .transmit(apdu, &mut response_buff)
             .map_err(|err| {
-                Error::CardCommunicateFailed(format!("Failed to transceive card APDU: {}", err))
+                Error::CardCommunicateFailed(format!("Failed to transceive card APDU: {err}"))
             })?;
 
         Ok(response.to_vec())

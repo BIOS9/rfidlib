@@ -196,25 +196,25 @@ impl MadAid {
             Ok(MadAid::CardAdministration(AdministrationCode::try_from(
                 application_value,
             )?))
+        } else if let Ok(fc) = FunctionCluster::try_from(function_cluster) {
+            Ok(MadAid::Application(fc, application_value))
         } else {
-            if let Ok(fc) = FunctionCluster::try_from(function_cluster) {
-                Ok(MadAid::Application(fc, application_value))
-            } else {
-                Ok(MadAid::Reserved(function_cluster, application_value))
-            }
+            Ok(MadAid::Reserved(function_cluster, application_value))
         }
     }
 
     pub fn try_from_u16(value: u16) -> Result<Self, MadAidError> {
-        let function_cluster = (value >> 8) as u8;
-        let application_value = value as u8;
+        let function_cluster =
+            u8::try_from(value >> 8).expect("upper byte of a u16 always fits in a u8");
+        let application_value =
+            u8::try_from(value & 0x00FF).expect("lower byte of a u16 always fits in a u8");
 
         Self::try_from_u8(function_cluster, application_value)
     }
 
     pub fn to_u16(&self) -> u16 {
         let [function_cluster, application_code] = self.to_u8_slice();
-        ((function_cluster as u16) << 8) | (application_code as u16)
+        (u16::from(function_cluster) << 8) | u16::from(application_code)
     }
 
     pub fn to_u8_slice(&self) -> [u8; 2] {
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn mad_try_from_u8_valid_application() {
         for i in 1..=u8::MAX {
-            if let Ok(_) = FunctionCluster::try_from(i) {
+            if FunctionCluster::try_from(i).is_ok() {
                 for j in u8::MIN..=u8::MAX {
                     let aid = MadAid::try_from_u8(i, j).unwrap();
                     match aid {
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn mad_try_from_u8_invalid_function_cluster() {
         for i in 1..=u8::MAX {
-            if let Err(_) = FunctionCluster::try_from(i) {
+            if FunctionCluster::try_from(i).is_err() {
                 for j in u8::MIN..=u8::MAX {
                     match MadAid::try_from_u8(i, j) {
                         Ok(MadAid::Reserved(a, b)) => {
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn mad_try_from_u8_valid_admin_code() {
         for i in 1..=u8::MAX {
-            if let Ok(_) = AdministrationCode::try_from(i) {
+            if AdministrationCode::try_from(i).is_ok() {
                 let aid = MadAid::try_from_u8(0, i).unwrap();
                 match aid {
                     MadAid::CardAdministration(a) => {
@@ -458,9 +458,9 @@ mod tests {
         }
 
         for i in 1..=u16::MAX {
-            let fc = (i >> 8) as u8;
-            let app = i as u8;
-            if let Ok(_) = FunctionCluster::try_from(fc) {
+            let fc = u8::try_from(i >> 8).expect("upper byte of a u16 always fits in a u8");
+            let app = u8::try_from(i & 0x00FF).expect("lower byte of a u16 always fits in a u8");
+            if FunctionCluster::try_from(fc).is_ok() {
                 let aid = MadAid::try_from_u16(i).unwrap();
                 match aid {
                     MadAid::Application(f, a) => {

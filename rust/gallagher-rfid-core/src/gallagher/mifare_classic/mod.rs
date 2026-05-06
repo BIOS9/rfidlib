@@ -3,9 +3,7 @@ pub mod cad;
 use heapless::Vec;
 
 use crate::mifare::application_directory::{MadError, MifareApplicationDirectory, NonMadSector};
-use crate::mifare::classic::{
-    Block, FourBlockOffset, FourBlockSector, KeyProvider, Sector, Tag,
-};
+use crate::mifare::classic::{Block, FourBlockOffset, FourBlockSector, KeyProvider, Sector, Tag};
 
 use super::credential::{CredentialError, GallagherCredential};
 use cad::CardApplicationDirectory;
@@ -107,13 +105,11 @@ impl GallagherMifareClassic {
         // Read each credential sector, silently skipping failures.
         let mut credentials: Vec<(NonMadSector, GallagherCredential), 12> = Vec::new();
         for sector_num in &credential_sectors {
-            let sector = match Sector::try_from(*sector_num) {
-                Ok(s) => s,
-                Err(_) => continue,
+            let Ok(sector) = Sector::try_from(*sector_num) else {
+                continue;
             };
-            let non_mad = match NonMadSector::try_from(sector) {
-                Ok(s) => s,
-                Err(_) => continue,
+            let Ok(non_mad) = NonMadSector::try_from(sector) else {
+                continue;
             };
             if let Ok(cred) = read_credential_sector(tag, sector, key_provider) {
                 let _ = credentials.push((non_mad, cred));
@@ -196,7 +192,6 @@ fn read_credential_sector<T: Tag>(
     }
 
     let credential_bytes: &[u8; 8] = block0[..8].try_into().unwrap();
-    GallagherCredential::decode(credential_bytes).map_err(|_| {
-        Error::InvalidCredential(u8::from(Block::from(sector)) / 4)
-    })
+    GallagherCredential::decode(credential_bytes)
+        .map_err(|_| Error::InvalidCredential(u8::from(Block::from(sector)) / 4))
 }

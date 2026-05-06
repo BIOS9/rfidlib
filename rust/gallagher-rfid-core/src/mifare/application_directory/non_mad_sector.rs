@@ -28,9 +28,9 @@ impl TryFrom<Sector> for NonMadSector {
         match sector.into() {
             0 => Err(NonMadSectorError::ReservedForMadV1),
             16 => Err(NonMadSectorError::ReservedForMadV2),
-            0..40 => Ok(NonMadSector(sector)),
+            1..=15 | 17..=39 => Ok(NonMadSector(sector)),
             // Sector type cannot be greater than 39.
-            _ => unreachable!("Sector had a value greater than 39 {}", sector),
+            _ => unreachable!("Sector had a value greater than 39"),
         }
     }
 }
@@ -49,9 +49,9 @@ impl From<NonMadSector> for u8 {
 
 #[derive(Debug)]
 pub enum NonMadSectorError {
-    /// Sector is reserved for MADv1 data.
+    /// Sector is reserved for `MADv1` data.
     ReservedForMadV1,
-    /// Sector is reserved for MADv2 data.
+    /// Sector is reserved for `MADv2` data.
     ReservedForMadV2,
 }
 

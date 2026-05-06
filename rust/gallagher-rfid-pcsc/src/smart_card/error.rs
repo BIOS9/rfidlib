@@ -16,15 +16,15 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::ContextInitFailed(msg) => {
-                write!(f, "Context initialization failed: {}", msg)
+                write!(f, "Context initialization failed: {msg}")
             }
-            Error::ReaderListFailed(msg) => write!(f, "Reader list failed: {}", msg),
-            Error::CardConnectFailed(msg) => write!(f, "Card connect failed: {}", msg),
+            Error::ReaderListFailed(msg) => write!(f, "Reader list failed: {msg}"),
+            Error::CardConnectFailed(msg) => write!(f, "Card connect failed: {msg}"),
             Error::CardCommunicateFailed(msg) => {
-                write!(f, "Communication with card failed: {}", msg)
+                write!(f, "Communication with card failed: {msg}")
             }
             Error::UnsupportedReader(msg) => {
-                write!(f, "The selected reader is not supported: {}", msg)
+                write!(f, "The selected reader is not supported: {msg}")
             }
         }
     }

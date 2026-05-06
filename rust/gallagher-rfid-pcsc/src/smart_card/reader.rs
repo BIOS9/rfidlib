@@ -16,7 +16,7 @@ impl<'a> SmartCardReader<'a> {
         let pcsc_context = self.context.get_pcsc_context();
 
         let c_name = CString::new(self.name.clone()).map_err(|err| {
-            Error::CardConnectFailed(format!("Reader name contains null byte: {}", err))
+            Error::CardConnectFailed(format!("Reader name contains null byte: {err}"))
         })?;
 
         match pcsc_context.connect(c_name.as_c_str(), ShareMode::Exclusive, Protocols::ANY) {
@@ -25,8 +25,7 @@ impl<'a> SmartCardReader<'a> {
                 Error::CardConnectFailed("Smart card not present in the reader".to_string()),
             ),
             Err(err) => Err(Error::CardConnectFailed(format!(
-                "Failed to connect to smart card: {}",
-                err
+                "Failed to connect to smart card: {err}"
             ))),
         }
     }

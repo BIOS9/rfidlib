@@ -27,8 +27,7 @@ impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
         let vendor = card.get_vendor()?;
         if vendor != "ACS" {
             return Err(Error::UnsupportedReader(format!(
-                "Unexpected vendor for ACR122u: {}",
-                vendor
+                "Unexpected vendor for ACR122u: {vendor}"
             )));
         }
 
@@ -40,8 +39,7 @@ impl<'a> TryFrom<SmartCardReader<'a>> for Acr122uReader<'a> {
             Ok(Acr122uReader::new(reader))
         } else {
             Err(Error::UnsupportedReader(format!(
-                "Unexpected firmware version for ACR122u: {}",
-                firmware
+                "Unexpected firmware version for ACR122u: {firmware}"
             )))
         }
     }
