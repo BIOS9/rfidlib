@@ -171,4 +171,90 @@ mod tests {
             assert_eq!(i as u8, decoded, "Round-trip failed at index {}", i);
         }
     }
+
+    #[test]
+    fn encode_known_vectors() {
+        // Real-world test vectors from Kotlin GallagherCredentialTest / megabug research.
+        let cases: &[((u8, u16, u32, u8), [u8; 8])] = &[
+            ((0,  0,        0,        0),  [0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3]),
+            ((2,  64844,    4123540,  12), [0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59]),
+            ((5,  24188,    7402878,  10), [0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B]),
+            ((13, 32643,    1224475,  1),  [0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9]),
+            ((14, 25487,    3151704,  9),  [0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4]),
+            ((3,  11803,    1390761,  5),  [0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2]),
+            ((11, 35851,    4243243,  3),  [0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E]),
+            ((1,  38766,    4561877,  7),  [0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C]),
+            ((8,  64470,    8299404,  8),  [0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98]),
+            ((9,  59145,    4110319,  14), [0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B]),
+            ((15, 65535,    16777215, 15), [0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90]),
+        ];
+        for &((rc, fc, cn, il), expected) in cases {
+            let cred = GallagherCredential::new(rc, fc, cn, il).unwrap();
+            assert_eq!(cred.encode(), expected, "encode failed for rc={rc} fc={fc} cn={cn} il={il}");
+        }
+    }
+
+    #[test]
+    fn decode_known_vectors() {
+        let cases: &[([u8; 8], (u8, u16, u32, u8))] = &[
+            ([0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3], (0,  0,        0,        0)),
+            ([0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59],  (2,  64844,    4123540,  12)),
+            ([0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B],  (5,  24188,    7402878,  10)),
+            ([0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9],  (13, 32643,    1224475,  1)),
+            ([0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4],  (14, 25487,    3151704,  9)),
+            ([0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2],  (3,  11803,    1390761,  5)),
+            ([0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E],  (11, 35851,    4243243,  3)),
+            ([0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C],  (1,  38766,    4561877,  7)),
+            ([0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98],  (8,  64470,    8299404,  8)),
+            ([0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B],  (9,  59145,    4110319,  14)),
+            ([0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90],  (15, 65535,    16777215, 15)),
+        ];
+        for &(bytes, (rc, fc, cn, il)) in cases {
+            let cred = GallagherCredential::decode(&bytes).unwrap();
+            assert_eq!(cred.region_code,   rc,  "region_code mismatch for {:02X?}", bytes);
+            assert_eq!(cred.facility_code, fc,  "facility_code mismatch for {:02X?}", bytes);
+            assert_eq!(cred.card_number,   cn,  "card_number mismatch for {:02X?}", bytes);
+            assert_eq!(cred.issue_level,   il,  "issue_level mismatch for {:02X?}", bytes);
+        }
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_exhaustive() {
+        for rc in (0u8..=0x0F).step_by(2) {
+            for fc in (0u16..=0xFFFF).step_by(500) {
+                for cn in (0u32..=0xFF_FFFF).step_by(2000) {
+                    for il in (0u8..=0x0F).step_by(3) {
+                        let cred = GallagherCredential::new(rc, fc, cn, il).unwrap();
+                        let decoded = GallagherCredential::decode(&cred.encode()).unwrap();
+                        assert_eq!(cred, decoded);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_code_letter() {
+        let cases: &[(u8, char)] = &[(0, 'A'), (1, 'B'), (5, 'F'), (10, 'K'), (15, 'P')];
+        for &(rc, expected) in cases {
+            let cred = GallagherCredential::new(rc, 0, 0, 0).unwrap();
+            assert_eq!(cred.region_code_letter(), expected, "wrong letter for rc={rc}");
+        }
+    }
+
+    #[test]
+    fn error_variants_carry_correct_value() {
+        assert_eq!(
+            GallagherCredential::new(0x10, 0, 0, 0),
+            Err(CredentialError::InvalidRegionCode(0x10))
+        );
+        assert_eq!(
+            GallagherCredential::new(0, 0, 0x1_000_000, 0),
+            Err(CredentialError::InvalidCardNumber(0x1_000_000))
+        );
+        assert_eq!(
+            GallagherCredential::new(0, 0, 0, 0x10),
+            Err(CredentialError::InvalidIssueLevel(0x10))
+        );
+    }
 }
