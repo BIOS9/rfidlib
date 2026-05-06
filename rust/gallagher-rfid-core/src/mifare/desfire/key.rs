@@ -40,3 +40,136 @@ impl From<KeyNumber> for u8 {
         value.0
     }
 }
+
+/// Key settings for the currently selected `DESFire` application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeySettings {
+    raw_settings: u8,
+    raw_key_count: u8,
+    key_count: u8,
+    key_type: ApplicationKeyType,
+}
+
+impl KeySettings {
+    /// Parses a `GetKeySettings` response.
+    pub fn parse(data: &[u8]) -> Result<Self, Error> {
+        if data.len() != 2 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let key_type = match data[1] >> 6 {
+            0b00 => ApplicationKeyType::TwoKey3Des,
+            0b01 => ApplicationKeyType::ThreeKey3Des,
+            0b10 => ApplicationKeyType::Aes,
+            0b11 => ApplicationKeyType::Rfu,
+            _ => unreachable!("two-bit value"),
+        };
+
+        Ok(Self {
+            raw_settings: data[0],
+            raw_key_count: data[1],
+            key_count: data[1] & 0x0F,
+            key_type,
+        })
+    }
+
+    /// Raw settings byte.
+    pub const fn raw_settings(self) -> u8 {
+        self.raw_settings
+    }
+
+    /// Raw key-count/key-type byte.
+    pub const fn raw_key_count(self) -> u8 {
+        self.raw_key_count
+    }
+
+    /// Number of keys configured for the selected application.
+    pub const fn key_count(self) -> u8 {
+        self.key_count
+    }
+
+    /// Key type encoded by the card.
+    pub const fn key_type(self) -> ApplicationKeyType {
+        self.key_type
+    }
+
+    /// Whether configuration changes are allowed.
+    pub const fn configuration_changeable(self) -> bool {
+        self.raw_settings & 0x08 != 0
+    }
+
+    /// Whether the master key is required to create or delete applications/files.
+    pub const fn master_key_required_for_create_delete(self) -> bool {
+        self.raw_settings & 0x04 == 0
+    }
+
+    /// Whether the master key is required to list applications/files or read key settings.
+    pub const fn master_key_required_for_list(self) -> bool {
+        self.raw_settings & 0x02 == 0
+    }
+
+    /// Whether create/delete operations are allowed without master-key authentication.
+    pub const fn free_create_delete(self) -> bool {
+        self.raw_settings & 0x04 != 0
+    }
+
+    /// Whether list/key-settings operations are allowed without master-key authentication.
+    pub const fn free_list(self) -> bool {
+        self.raw_settings & 0x02 != 0
+    }
+
+    /// Whether the master key itself is changeable.
+    pub const fn master_key_changeable(self) -> bool {
+        self.raw_settings & 0x01 != 0
+    }
+}
+
+/// Application key family encoded in `GetKeySettings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplicationKeyType {
+    TwoKey3Des,
+    ThreeKey3Des,
+    Aes,
+    Rfu,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mifare::desfire::key::{ApplicationKeyType, KeySettings};
+
+    #[test]
+    fn parses_picc_key_settings() {
+        let settings = KeySettings::parse(&[0x0F, 0x01]).unwrap();
+
+        assert!(settings.configuration_changeable());
+        assert!(!settings.master_key_required_for_create_delete());
+        assert!(!settings.master_key_required_for_list());
+        assert!(settings.free_create_delete());
+        assert!(settings.free_list());
+        assert!(settings.master_key_changeable());
+        assert_eq!(settings.key_count(), 1);
+        assert_eq!(settings.key_type(), ApplicationKeyType::TwoKey3Des);
+    }
+
+    #[test]
+    fn parses_application_key_type() {
+        let settings = KeySettings::parse(&[0x0F, 0x82]).unwrap();
+
+        assert_eq!(settings.key_count(), 2);
+        assert_eq!(settings.key_type(), ApplicationKeyType::Aes);
+    }
+
+    #[test]
+    fn parses_application_rights() {
+        let settings = KeySettings::parse(&[0x0B, 0x81]).unwrap();
+
+        assert!(settings.configuration_changeable());
+        assert!(settings.master_key_required_for_create_delete());
+        assert!(!settings.master_key_required_for_list());
+        assert!(!settings.free_create_delete());
+        assert!(settings.free_list());
+        assert!(settings.master_key_changeable());
+        assert_eq!(settings.key_count(), 1);
+        assert_eq!(settings.key_type(), ApplicationKeyType::Aes);
+    }
+}

@@ -7,6 +7,7 @@ use crate::mifare::desfire::{
     executor::Executor,
     file::{FileId, FileSettings},
     framing::FrameCodec,
+    key::{KeyNumber, KeySettings},
     transport::Transport,
     types::U24,
     version::VersionInfo,
@@ -56,6 +57,37 @@ where
 
         self.executor.execute(&command, &mut data)?;
         VersionInfo::parse(data.as_slice())
+    }
+
+    /// Reads key settings for the currently selected application.
+    pub fn get_key_settings(&mut self) -> Result<KeySettings, Error> {
+        let command = Command::new(CommandCode::GET_KEY_SETTINGS, &[])?;
+        let mut data: Vec<u8, 2> = Vec::new();
+
+        self.executor.execute(&command, &mut data)?;
+        KeySettings::parse(data.as_slice())
+    }
+
+    /// Reads one key version from the currently selected application.
+    pub fn get_key_version(&mut self, key_number: KeyNumber) -> Result<u8, Error> {
+        let command = Command::new(CommandCode::GET_KEY_VERSION, &[key_number.as_byte()])?;
+        let mut data: Vec<u8, 1> = Vec::new();
+
+        self.executor.execute(&command, &mut data)?;
+        data.first().copied().ok_or(Error::InvalidResponseLength)
+    }
+
+    /// Reads available free memory, when supported by the card.
+    pub fn free_memory(&mut self) -> Result<U24, Error> {
+        let command = Command::new(CommandCode::FREE_MEM, &[])?;
+        let mut data: Vec<u8, 3> = Vec::new();
+
+        self.executor.execute(&command, &mut data)?;
+        let bytes = data
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::InvalidResponseLength)?;
+        Ok(U24::from_le_bytes(bytes))
     }
 
     /// Selects an application by `DESFire` AID.
@@ -162,6 +194,7 @@ mod tests {
         error::Error,
         file::{FileId, FileSettingsDetails},
         framing::NativeFraming,
+        key::{ApplicationKeyType, KeyNumber},
         transport::{Frame, Transport},
         types::U24,
     };
@@ -233,6 +266,37 @@ mod tests {
                 FileId::new(0x03).unwrap()
             ]
         );
+    }
+
+    #[test]
+    fn reads_key_settings() {
+        let transport = MockTransport::new([(&[0x45][..], &[0x00, 0x0F, 0x82][..])]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let settings = desfire.get_key_settings().unwrap();
+
+        assert_eq!(settings.key_count(), 2);
+        assert_eq!(settings.key_type(), ApplicationKeyType::Aes);
+    }
+
+    #[test]
+    fn reads_key_version() {
+        let transport = MockTransport::new([(&[0x64, 0x01][..], &[0x00, 0x42][..])]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let version = desfire.get_key_version(KeyNumber::new(1).unwrap()).unwrap();
+
+        assert_eq!(version, 0x42);
+    }
+
+    #[test]
+    fn reads_free_memory() {
+        let transport = MockTransport::new([(&[0x6E][..], &[0x00, 0x20, 0x03, 0x00][..])]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let memory = desfire.free_memory().unwrap();
+
+        assert_eq!(memory.as_u32(), 800);
     }
 
     #[test]

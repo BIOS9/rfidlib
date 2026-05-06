@@ -28,7 +28,7 @@ pub use file::{
     FileType,
 };
 pub use framing::{FrameCodec, NativeFraming, WrappedFraming};
-pub use key::{Key, KeyNumber};
+pub use key::{ApplicationKeyType, Key, KeyNumber, KeySettings};
 pub use session::{AuthenticatedSession, Session};
 pub use status::Status;
 pub use transport::{Frame, Transport, MAX_FRAME_SIZE};

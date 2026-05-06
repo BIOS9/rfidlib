@@ -11,8 +11,9 @@ use gallagher_rfid_core::mifare::application_directory::{
 };
 use gallagher_rfid_core::mifare::classic::{FourBlockSector, KeyProvider, KeyType, Sector, Tag};
 use gallagher_rfid_core::mifare::desfire::{
-    AccessCondition, ApplicationId, CommunicationMode, Desfire, FileId, FileSettings,
-    FileSettingsDetails, FileType, Transport, WrappedFraming, U24,
+    AccessCondition, ApplicationId, ApplicationKeyType, CommunicationMode, Desfire, FileId,
+    FileSettings, FileSettingsDetails, FileType, KeyNumber, KeySettings, Transport, WrappedFraming,
+    U24,
 };
 use gallagher_rfid_pcsc::{
     acr122u::Acr122uReader,
@@ -265,6 +266,19 @@ fn read_desfire_tag<T: Transport>(transport: T) {
         }
     }
 
+    println!("\n=== PICC ===");
+    match desfire.get_key_settings() {
+        Ok(settings) => {
+            print_key_settings(settings);
+            print_key_versions(&mut desfire, settings);
+        }
+        Err(error) => eprintln!("  GetKeySettings failed: {error:?}"),
+    }
+    match desfire.free_memory() {
+        Ok(memory) => println!("  Free memory:      {} bytes", memory.as_u32()),
+        Err(error) => eprintln!("  FreeMem failed: {error:?}"),
+    }
+
     let mut application_ids: HeaplessVec<ApplicationId, 32> = HeaplessVec::new();
     match desfire.get_application_ids(&mut application_ids) {
         Ok(()) => {
@@ -292,6 +306,14 @@ fn read_desfire_tag<T: Transport>(transport: T) {
             continue;
         }
 
+        match desfire.get_key_settings() {
+            Ok(settings) => {
+                print_key_settings(settings);
+                print_key_versions(&mut desfire, settings);
+            }
+            Err(error) => eprintln!("  GetKeySettings failed: {error:?}"),
+        }
+
         let mut file_ids: HeaplessVec<FileId, 32> = HeaplessVec::new();
         match desfire.get_file_ids(&mut file_ids) {
             Ok(()) if file_ids.is_empty() => {
@@ -314,6 +336,48 @@ fn read_desfire_tag<T: Transport>(transport: T) {
                 }
                 Err(error) => eprintln!("    GetFileSettings failed: {error:?}"),
             }
+        }
+    }
+}
+
+fn print_key_settings(settings: KeySettings) {
+    println!(
+        "  Key settings raw: {:02X} {:02X}",
+        settings.raw_settings(),
+        settings.raw_key_count()
+    );
+    println!("  Key count:        {}", settings.key_count());
+    println!(
+        "  Key type:         {}",
+        application_key_type_name(settings.key_type())
+    );
+    println!(
+        "  Rights:           cfg_changeable={} create_delete_requires_mk={} list_requires_mk={} mk_changeable={}",
+        settings.configuration_changeable(),
+        settings.master_key_required_for_create_delete(),
+        settings.master_key_required_for_list(),
+        settings.master_key_changeable(),
+    );
+}
+
+fn print_key_versions<T: Transport, C: gallagher_rfid_core::mifare::desfire::FrameCodec>(
+    desfire: &mut Desfire<T, C>,
+    settings: KeySettings,
+) {
+    for key_number in 0..settings.key_count() {
+        let Ok(key_number) = KeyNumber::new(key_number) else {
+            continue;
+        };
+        match desfire.get_key_version(key_number) {
+            Ok(version) => println!(
+                "  Key {} version:   {} (0x{version:02X})",
+                key_number.as_byte(),
+                version
+            ),
+            Err(error) => eprintln!(
+                "  GetKeyVersion({}) failed: {error:?}",
+                key_number.as_byte()
+            ),
         }
     }
 }
@@ -421,6 +485,15 @@ fn communication_mode_name(mode: CommunicationMode) -> &'static str {
         CommunicationMode::Plain => "plain",
         CommunicationMode::Maced => "MACed",
         CommunicationMode::Enciphered => "enciphered",
+    }
+}
+
+fn application_key_type_name(key_type: ApplicationKeyType) -> &'static str {
+    match key_type {
+        ApplicationKeyType::TwoKey3Des => "2TDEA",
+        ApplicationKeyType::ThreeKey3Des => "3TDEA",
+        ApplicationKeyType::Aes => "AES",
+        ApplicationKeyType::Rfu => "RFU",
     }
 }
 
