@@ -82,11 +82,11 @@ impl MifareApplicationDirectory {
 
         // Max sector 15 for MADv1, sector 39 for MADv2.
         if mad_version == MadVersion::V1 {
-            if let Some((&sector, _)) = applications
-                .into_iter()
+            if let Some((sector, _)) = applications
+                .iter()
                 .find(|(&sector, _)| u8::from(sector) > max_application_sector)
             {
-                return Err(MadError::InvalidApplicationSectorForMadV1(sector.into()));
+                return Err(MadError::InvalidApplicationSectorForMadV1((*sector).into()));
             }
         }
 
