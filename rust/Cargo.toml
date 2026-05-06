@@ -6,6 +6,10 @@ members = [
     "gallagher-rfid-cli",
 ]
 
+[workspace.dependencies]
+heapless = "0.9.3"
+pcsc = "2.9.0"
+
 [workspace.lints.rust]
 unsafe_code = "warn"
 
