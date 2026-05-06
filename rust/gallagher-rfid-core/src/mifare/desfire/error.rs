@@ -15,6 +15,8 @@ pub enum Error {
     TooManyAdditionalFrames,
     /// A successful response did not have the expected shape for the command.
     InvalidResponseLength,
+    /// AES authentication failed because the card did not prove knowledge of the key.
+    AuthenticationFailed,
     /// The card returned a non-success `DESFire` status.
     Status(Status),
     /// An application identifier exceeded the `DESFire` 24-bit AID range.

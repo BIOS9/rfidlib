@@ -11,4 +11,5 @@ default = ["std"]
 std = []
 
 [dependencies]
+aes = { workspace = true }
 heapless = { workspace = true }

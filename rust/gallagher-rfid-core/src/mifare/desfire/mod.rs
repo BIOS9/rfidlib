@@ -7,6 +7,7 @@
 pub mod application;
 pub mod client;
 pub mod command;
+pub mod crypto;
 pub mod error;
 pub mod executor;
 pub mod file;
@@ -21,6 +22,7 @@ pub mod version;
 pub use application::ApplicationId;
 pub use client::Desfire;
 pub use command::{Command, CommandCode, Response};
+pub use crypto::{AesCmac, AesCmacChaining, AesSessionKey, DesfireMac, RndA, RndB};
 pub use error::Error;
 pub use executor::{Executor, MAX_ADDITIONAL_FRAMES};
 pub use file::{
@@ -29,7 +31,7 @@ pub use file::{
 };
 pub use framing::{FrameCodec, NativeFraming, WrappedFraming};
 pub use key::{ApplicationKeyType, Key, KeyNumber, KeySettings};
-pub use session::{AuthenticatedSession, Session};
+pub use session::{AuthenticatedSession, Session, SessionKey};
 pub use status::Status;
 pub use transport::{Frame, Transport, MAX_FRAME_SIZE};
 pub use types::U24;

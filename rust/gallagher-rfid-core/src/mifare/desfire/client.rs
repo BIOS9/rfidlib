@@ -3,11 +3,14 @@ use heapless::Vec;
 use crate::mifare::desfire::{
     application::ApplicationId,
     command::{Command, CommandCode},
+    crypto::{aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, AesSessionKey, RndA, RndB},
     error::Error,
     executor::Executor,
     file::{FileId, FileSettings},
     framing::FrameCodec,
     key::{KeyNumber, KeySettings},
+    session::AuthenticatedSession,
+    status::Status,
     transport::Transport,
     types::U24,
     version::VersionInfo,
@@ -57,6 +60,57 @@ where
 
         self.executor.execute(&command, &mut data)?;
         VersionInfo::parse(data.as_slice())
+    }
+
+    /// Performs legacy AES authentication with caller-provided reader randomness.
+    ///
+    /// This establishes the session key but does not yet enable `MACed` or
+    /// enciphered secure messaging for later commands.
+    pub fn authenticate_aes_with_rnd_a(
+        &mut self,
+        key_number: KeyNumber,
+        key: &[u8; 16],
+        rnd_a: RndA,
+    ) -> Result<AuthenticatedSession, Error> {
+        let command = Command::new(CommandCode::AUTHENTICATE_AES, &[key_number.as_byte()])?;
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::AdditionalFrame {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 16 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let encrypted_rnd_b: [u8; 16] = response.data().try_into().expect("length is checked");
+        let mut rnd_b_bytes = encrypted_rnd_b;
+        aes_cbc_decrypt_in_place(key, &[0u8; 16], &mut rnd_b_bytes);
+        let rnd_b = RndB::new(rnd_b_bytes);
+
+        let mut challenge_response = [0u8; 32];
+        challenge_response[..16].copy_from_slice(&rnd_a.as_bytes());
+        challenge_response[16..].copy_from_slice(&rnd_b.rotate_left());
+        aes_cbc_encrypt_in_place(key, &encrypted_rnd_b, &mut challenge_response);
+
+        let response = self.executor.exchange_one(&Command::new(
+            CommandCode::ADDITIONAL_FRAME,
+            &challenge_response,
+        )?)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 16 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let mut returned_rnd_a: [u8; 16] = response.data().try_into().expect("length is checked");
+        let response_iv: [u8; 16] = challenge_response[16..32].try_into().expect("valid slice");
+        aes_cbc_decrypt_in_place(key, &response_iv, &mut returned_rnd_a);
+        if returned_rnd_a != rnd_a.rotate_left() {
+            return Err(Error::AuthenticationFailed);
+        }
+
+        let session_key = AesSessionKey::derive(rnd_a, rnd_b);
+        Ok(AuthenticatedSession::new_aes(key_number, session_key))
     }
 
     /// Reads key settings for the currently selected application.
@@ -191,10 +245,12 @@ mod tests {
 
     use crate::mifare::desfire::{
         client::Desfire,
+        crypto::{aes_cbc_encrypt_in_place, AesSessionKey, RndA, RndB},
         error::Error,
         file::{FileId, FileSettingsDetails},
-        framing::NativeFraming,
+        framing::{NativeFraming, WrappedFraming},
         key::{ApplicationKeyType, KeyNumber},
+        session::SessionKey,
         transport::{Frame, Transport},
         types::U24,
     };
@@ -221,6 +277,32 @@ mod tests {
             assert_eq!(tx, expected_tx);
             rx.clear();
             rx.extend_from_slice(response).map_err(|_| Error::Transport)
+        }
+    }
+
+    struct OwnedMockTransport<const N: usize, const M: usize> {
+        exchanges: [([u8; M], usize, [u8; M], usize); N],
+        index: usize,
+    }
+
+    impl<const N: usize, const M: usize> OwnedMockTransport<N, M> {
+        const fn new(exchanges: [([u8; M], usize, [u8; M], usize); N]) -> Self {
+            Self {
+                exchanges,
+                index: 0,
+            }
+        }
+    }
+
+    impl<const N: usize, const M: usize> Transport for OwnedMockTransport<N, M> {
+        fn transceive(&mut self, tx: &[u8], rx: &mut Frame) -> Result<(), Error> {
+            let (expected_tx, expected_tx_len, response, response_len) = self.exchanges[self.index];
+            self.index += 1;
+
+            assert_eq!(tx, &expected_tx[..expected_tx_len]);
+            rx.clear();
+            rx.extend_from_slice(&response[..response_len])
+                .map_err(|_| Error::Transport)
         }
     }
 
@@ -287,6 +369,161 @@ mod tests {
         let version = desfire.get_key_version(KeyNumber::new(1).unwrap()).unwrap();
 
         assert_eq!(version, 0x42);
+    }
+
+    #[test]
+    fn authenticates_with_aes() {
+        let key = [0x11; 16];
+        let rnd_a = RndA::new([
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD,
+            0xAE, 0xAF,
+        ]);
+        let rnd_b = RndB::new([
+            0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD,
+            0xBE, 0xBF,
+        ]);
+
+        let mut encrypted_rnd_b = rnd_b.as_bytes();
+        aes_cbc_encrypt_in_place(&key, &[0u8; 16], &mut encrypted_rnd_b);
+
+        let mut encrypted_challenge = [0u8; 32];
+        encrypted_challenge[..16].copy_from_slice(&rnd_a.as_bytes());
+        encrypted_challenge[16..].copy_from_slice(&rnd_b.rotate_left());
+        aes_cbc_encrypt_in_place(&key, &encrypted_rnd_b, &mut encrypted_challenge);
+
+        let mut encrypted_rotated_rnd_a = rnd_a.rotate_left();
+        let response_iv: [u8; 16] = encrypted_challenge[16..32].try_into().unwrap();
+        aes_cbc_encrypt_in_place(&key, &response_iv, &mut encrypted_rotated_rnd_a);
+
+        let mut first_response = [0u8; 17];
+        first_response[0] = 0xAF;
+        first_response[1..].copy_from_slice(&encrypted_rnd_b);
+        let mut second_response = [0u8; 17];
+        second_response[0] = 0x00;
+        second_response[1..].copy_from_slice(&encrypted_rotated_rnd_a);
+
+        let mut second_command = [0u8; 33];
+        second_command[0] = 0xAF;
+        second_command[1..].copy_from_slice(&encrypted_challenge);
+
+        let mut first_command = [0u8; 33];
+        first_command[..2].copy_from_slice(&[0xAA, 0x01]);
+        let mut first_response_padded = [0u8; 33];
+        first_response_padded[..17].copy_from_slice(&first_response);
+        let mut second_response_padded = [0u8; 33];
+        second_response_padded[..17].copy_from_slice(&second_response);
+
+        let transport = OwnedMockTransport::new([
+            (first_command, 2, first_response_padded, 17),
+            (second_command, 33, second_response_padded, 17),
+        ]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let session = desfire
+            .authenticate_aes_with_rnd_a(KeyNumber::new(1).unwrap(), &key, rnd_a)
+            .unwrap();
+
+        assert_eq!(session.key_number(), KeyNumber::new(1).unwrap());
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Aes(AesSessionKey::derive(rnd_a, rnd_b))
+        );
+    }
+
+    #[test]
+    fn authenticates_with_wrapped_aes_proxmark_traces() {
+        assert_wrapped_aes_auth_trace(
+            &[
+                0x17, 0x34, 0x80, 0x9D, 0xCA, 0x92, 0x93, 0xFC, 0x5B, 0xAF, 0x4A, 0x9A, 0x0D, 0x5C,
+                0x56, 0x2D, 0x91, 0xAF,
+            ],
+            &[
+                0x90, 0xAF, 0x00, 0x00, 0x20, 0xB0, 0x1B, 0x55, 0x74, 0x08, 0x4A, 0x37, 0x14, 0x92,
+                0x52, 0xE9, 0xCA, 0x4A, 0x44, 0x80, 0x74, 0x42, 0x21, 0x81, 0xCF, 0x67, 0xC0, 0x9D,
+                0xE5, 0x06, 0x3B, 0x37, 0xC2, 0xF0, 0xCD, 0xF5, 0x8A, 0x00,
+            ],
+            &[
+                0xA6, 0xF8, 0x91, 0x88, 0xE2, 0x9C, 0x82, 0x22, 0xF6, 0xD9, 0x87, 0x42, 0x70, 0x55,
+                0xA1, 0x26, 0x91, 0x00,
+            ],
+            [
+                0x01, 0x02, 0x03, 0x04, 0x47, 0xDB, 0x4F, 0x91, 0x13, 0x14, 0x15, 0x16, 0x6E, 0xC6,
+                0x58, 0x25,
+            ],
+        );
+
+        assert_wrapped_aes_auth_trace(
+            &[
+                0x6C, 0xE8, 0x11, 0xA3, 0x7F, 0x10, 0x8E, 0x9F, 0xDB, 0x58, 0x54, 0xF9, 0x11, 0xA5,
+                0x2E, 0xDD, 0x91, 0xAF,
+            ],
+            &[
+                0x90, 0xAF, 0x00, 0x00, 0x20, 0x72, 0x0C, 0x78, 0xDB, 0x3B, 0x89, 0xF8, 0x19, 0x1F,
+                0x2B, 0xC0, 0xAC, 0x23, 0x99, 0x38, 0xBE, 0xC5, 0xB2, 0xE5, 0xAE, 0x8B, 0xE6, 0x49,
+                0x24, 0x8A, 0x28, 0xF7, 0x02, 0xB0, 0xFA, 0x54, 0x60, 0x00,
+            ],
+            &[
+                0x70, 0x07, 0x16, 0xB7, 0xF3, 0x5E, 0xE7, 0x9B, 0xBF, 0xF5, 0x22, 0xF0, 0xE3, 0xC0,
+                0x90, 0xCC, 0x91, 0x00,
+            ],
+            [
+                0x01, 0x02, 0x03, 0x04, 0xE5, 0xFF, 0xED, 0x4F, 0x13, 0x14, 0x15, 0x16, 0xC6, 0x74,
+                0xAA, 0x8E,
+            ],
+        );
+
+        assert_wrapped_aes_auth_trace(
+            &[
+                0x22, 0x0B, 0xE6, 0x13, 0xA2, 0x81, 0xA7, 0x65, 0xBC, 0x29, 0xE2, 0xFC, 0xFF, 0x95,
+                0x4D, 0x35, 0x91, 0xAF,
+            ],
+            &[
+                0x90, 0xAF, 0x00, 0x00, 0x20, 0x2C, 0x90, 0x62, 0x31, 0x21, 0x3F, 0x7F, 0x19, 0xBC,
+                0x63, 0xBA, 0x7D, 0x06, 0xA1, 0x5D, 0x6D, 0x48, 0x0D, 0xAA, 0x94, 0x78, 0xAD, 0xC6,
+                0x35, 0xC2, 0xF9, 0x74, 0x52, 0x9B, 0x6C, 0xD9, 0x9D, 0x00,
+            ],
+            &[
+                0x3C, 0x08, 0x02, 0xF3, 0xD8, 0xCC, 0xC8, 0xA2, 0x54, 0x82, 0x12, 0x85, 0xA7, 0x59,
+                0x22, 0xDC, 0x91, 0x00,
+            ],
+            [
+                0x01, 0x02, 0x03, 0x04, 0xB0, 0x39, 0x10, 0xE5, 0x13, 0x14, 0x15, 0x16, 0x7F, 0x00,
+                0x6F, 0x45,
+            ],
+        );
+    }
+
+    fn assert_wrapped_aes_auth_trace(
+        first_response: &'static [u8],
+        second_command: &'static [u8],
+        second_response: &'static [u8],
+        expected_session_key: [u8; 16],
+    ) {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0xAA, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                first_response,
+            ),
+            (second_command, second_response),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        let session = desfire
+            .authenticate_aes_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        assert_eq!(session.key_number(), KeyNumber::new(0).unwrap());
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Aes(AesSessionKey::new(expected_session_key))
+        );
     }
 
     #[test]
