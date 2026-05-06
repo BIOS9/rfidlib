@@ -1,6 +1,6 @@
 /// Gallagher cardholder credential encoding/decoding.
 ///
-/// Based on: https://github.com/megabug/gallagher-research/blob/master/formats/cardholder/cardholder.md
+/// Based on: <https://github.com/megabug/gallagher-research/blob/master/formats/cardholder/cardholder.md>
 use core::fmt;
 
 #[rustfmt::skip]
@@ -61,9 +61,9 @@ pub enum CredentialError {
 impl fmt::Display for CredentialError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CredentialError::InvalidRegionCode(v) => write!(f, "Invalid region code: {}", v),
-            CredentialError::InvalidCardNumber(v) => write!(f, "Invalid card number: {}", v),
-            CredentialError::InvalidIssueLevel(v) => write!(f, "Invalid issue level: {}", v),
+            CredentialError::InvalidRegionCode(v) => write!(f, "Invalid region code: {v}"),
+            CredentialError::InvalidCardNumber(v) => write!(f, "Invalid card number: {v}"),
+            CredentialError::InvalidIssueLevel(v) => write!(f, "Invalid issue level: {v}"),
         }
     }
 }
@@ -84,7 +84,12 @@ impl GallagherCredential {
         if issue_level > 0x0F {
             return Err(CredentialError::InvalidIssueLevel(issue_level));
         }
-        Ok(Self { region_code, facility_code, card_number, issue_level })
+        Ok(Self {
+            region_code,
+            facility_code,
+            card_number,
+            issue_level,
+        })
     }
 
     pub fn region_code_letter(&self) -> char {
@@ -95,24 +100,25 @@ impl GallagherCredential {
         let s: [u8; 8] = core::array::from_fn(|i| DECODING_TABLE[data[i] as usize]);
 
         let region_code = (s[3] & 0x1F) >> 1;
-        let facility_code = (((s[5] & 0x0F) as u16) << 12)
-            | ((s[1] as u16) << 4)
-            | (((s[7] & 0xF0) as u16) >> 4);
-        let card_number = ((s[0] as u32) << 16)
-            | (((s[4] & 0x1F) as u32) << 11)
-            | ((s[2] as u32) << 3)
-            | ((s[3] as u32) >> 5);
+        let facility_code =
+            (u16::from(s[5] & 0x0F) << 12) | (u16::from(s[1]) << 4) | (u16::from(s[7] & 0xF0) >> 4);
+        let card_number = (u32::from(s[0]) << 16)
+            | (u32::from(s[4] & 0x1F) << 11)
+            | (u32::from(s[2]) << 3)
+            | (u32::from(s[3]) >> 5);
         let issue_level = s[7] & 0x0F;
 
         Self::new(region_code, facility_code, card_number, issue_level)
     }
 
     pub fn encode(&self) -> [u8; 8] {
+        #[allow(clippy::cast_possible_truncation)]
+        // Bit-field packing: upper bits are shifted out before the `as u8` cast.
         let arranged: [u8; 8] = [
             (self.card_number >> 16) as u8,
             (self.facility_code >> 4) as u8,
             ((self.card_number & 0x7FF) >> 3) as u8,
-            (((self.card_number & 0x7) << 5) | ((self.region_code as u32) << 1)) as u8,
+            (((self.card_number & 0x7) << 5) | (u32::from(self.region_code) << 1)) as u8,
             ((self.card_number & 0xFFFF) >> 11) as u8,
             (self.facility_code >> 12) as u8,
             0,
@@ -165,56 +171,142 @@ mod tests {
 
     #[test]
     fn encoding_table_is_inverse_of_decoding_table() {
-        for i in 0usize..256 {
-            let encoded = ENCODING_TABLE[i];
-            let decoded = DECODING_TABLE[encoded as usize];
-            assert_eq!(i as u8, decoded, "Round-trip failed at index {}", i);
+        for (i, &encoded) in ENCODING_TABLE.iter().enumerate() {
+            let decoded = DECODING_TABLE[usize::from(encoded)];
+            #[allow(clippy::cast_possible_truncation)]
+            // Loop iterates 0..=255 so i fits in u8.
+            let i = i as u8;
+            assert_eq!(i, decoded, "Round-trip failed at index {i}");
         }
     }
 
     #[test]
     fn encode_known_vectors() {
         // Real-world test vectors from Kotlin GallagherCredentialTest / megabug research.
+        #[allow(clippy::type_complexity)]
         let cases: &[((u8, u16, u32, u8), [u8; 8])] = &[
-            ((0,  0,        0,        0),  [0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3]),
-            ((2,  64844,    4123540,  12), [0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59]),
-            ((5,  24188,    7402878,  10), [0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B]),
-            ((13, 32643,    1224475,  1),  [0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9]),
-            ((14, 25487,    3151704,  9),  [0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4]),
-            ((3,  11803,    1390761,  5),  [0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2]),
-            ((11, 35851,    4243243,  3),  [0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E]),
-            ((1,  38766,    4561877,  7),  [0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C]),
-            ((8,  64470,    8299404,  8),  [0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98]),
-            ((9,  59145,    4110319,  14), [0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B]),
-            ((15, 65535,    16777215, 15), [0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90]),
+            (
+                (0, 0, 0, 0),
+                [0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3],
+            ),
+            (
+                (2, 64_844, 4_123_540, 12),
+                [0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59],
+            ),
+            (
+                (5, 24_188, 7_402_878, 10),
+                [0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B],
+            ),
+            (
+                (13, 32_643, 1_224_475, 1),
+                [0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9],
+            ),
+            (
+                (14, 25_487, 3_151_704, 9),
+                [0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4],
+            ),
+            (
+                (3, 11_803, 1_390_761, 5),
+                [0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2],
+            ),
+            (
+                (11, 35_851, 4_243_243, 3),
+                [0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E],
+            ),
+            (
+                (1, 38_766, 4_561_877, 7),
+                [0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C],
+            ),
+            (
+                (8, 64_470, 8_299_404, 8),
+                [0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98],
+            ),
+            (
+                (9, 59_145, 4_110_319, 14),
+                [0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B],
+            ),
+            (
+                (15, 65_535, 16_777_215, 15),
+                [0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90],
+            ),
         ];
         for &((rc, fc, cn, il), expected) in cases {
             let cred = GallagherCredential::new(rc, fc, cn, il).unwrap();
-            assert_eq!(cred.encode(), expected, "encode failed for rc={rc} fc={fc} cn={cn} il={il}");
+            assert_eq!(
+                cred.encode(),
+                expected,
+                "encode failed for rc={rc} fc={fc} cn={cn} il={il}"
+            );
         }
     }
 
     #[test]
     fn decode_known_vectors() {
+        #[allow(clippy::type_complexity)]
         let cases: &[([u8; 8], (u8, u16, u32, u8))] = &[
-            ([0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3], (0,  0,        0,        0)),
-            ([0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59],  (2,  64844,    4123540,  12)),
-            ([0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B],  (5,  24188,    7402878,  10)),
-            ([0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9],  (13, 32643,    1224475,  1)),
-            ([0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4],  (14, 25487,    3151704,  9)),
-            ([0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2],  (3,  11803,    1390761,  5)),
-            ([0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E],  (11, 35851,    4243243,  3)),
-            ([0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C],  (1,  38766,    4561877,  7)),
-            ([0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98],  (8,  64470,    8299404,  8)),
-            ([0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B],  (9,  59145,    4110319,  14)),
-            ([0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90],  (15, 65535,    16777215, 15)),
+            (
+                [0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3, 0xA3],
+                (0, 0, 0, 0),
+            ),
+            (
+                [0x20, 0xA1, 0xFC, 0x12, 0x04, 0x05, 0xA3, 0x59],
+                (2, 64_844, 4_123_540, 12),
+            ),
+            (
+                [0x6E, 0x1C, 0x09, 0x8B, 0x51, 0xF4, 0xA3, 0x8B],
+                (5, 24_188, 7_402_878, 10),
+            ),
+            (
+                [0x61, 0x87, 0x2C, 0xCA, 0xCE, 0x6C, 0xA3, 0xB9],
+                (13, 32_643, 1_224_475, 1),
+            ),
+            (
+                [0x82, 0x39, 0x14, 0x44, 0x80, 0x5C, 0xA3, 0xE4],
+                (14, 25_487, 3_151_704, 9),
+            ),
+            (
+                [0xCE, 0x35, 0xCE, 0x74, 0x6C, 0x80, 0xA3, 0xF2],
+                (3, 11_803, 1_390_761, 5),
+            ),
+            (
+                [0x5A, 0xD5, 0xC9, 0x07, 0x8F, 0x81, 0xA3, 0x9E],
+                (11, 35_851, 4_243_243, 3),
+            ),
+            (
+                [0xA8, 0x07, 0xCA, 0xC3, 0xF6, 0xF1, 0xA3, 0x1C],
+                (1, 38_766, 4_561_877, 7),
+            ),
+            (
+                [0xFE, 0xF0, 0x1B, 0xD2, 0x22, 0x05, 0xA3, 0x98],
+                (8, 64_470, 8_299_404, 8),
+            ),
+            (
+                [0x20, 0x6E, 0xEE, 0x8D, 0xAA, 0x3C, 0xA3, 0x5B],
+                (9, 59_145, 4_110_319, 14),
+            ),
+            (
+                [0x90, 0x90, 0x90, 0xE3, 0x2E, 0x05, 0xA3, 0x90],
+                (15, 65_535, 16_777_215, 15),
+            ),
         ];
         for &(bytes, (rc, fc, cn, il)) in cases {
             let cred = GallagherCredential::decode(&bytes).unwrap();
-            assert_eq!(cred.region_code,   rc,  "region_code mismatch for {:02X?}", bytes);
-            assert_eq!(cred.facility_code, fc,  "facility_code mismatch for {:02X?}", bytes);
-            assert_eq!(cred.card_number,   cn,  "card_number mismatch for {:02X?}", bytes);
-            assert_eq!(cred.issue_level,   il,  "issue_level mismatch for {:02X?}", bytes);
+            assert_eq!(
+                cred.region_code, rc,
+                "region_code mismatch for {bytes:02X?}"
+            );
+            assert_eq!(
+                cred.facility_code, fc,
+                "facility_code mismatch for {bytes:02X?}"
+            );
+            assert_eq!(
+                cred.card_number, cn,
+                "card_number mismatch for {bytes:02X?}"
+            );
+            assert_eq!(
+                cred.issue_level, il,
+                "issue_level mismatch for {bytes:02X?}"
+            );
         }
     }
 
@@ -238,7 +330,11 @@ mod tests {
         let cases: &[(u8, char)] = &[(0, 'A'), (1, 'B'), (5, 'F'), (10, 'K'), (15, 'P')];
         for &(rc, expected) in cases {
             let cred = GallagherCredential::new(rc, 0, 0, 0).unwrap();
-            assert_eq!(cred.region_code_letter(), expected, "wrong letter for rc={rc}");
+            assert_eq!(
+                cred.region_code_letter(),
+                expected,
+                "wrong letter for rc={rc}"
+            );
         }
     }
 

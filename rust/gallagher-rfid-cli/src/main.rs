@@ -3,8 +3,8 @@ use std::env;
 use gallagher_rfid_core::gallagher::credential::GallagherCredential;
 use gallagher_rfid_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
 use gallagher_rfid_core::gallagher::mifare_classic::{
-    write_credential_to_sector, GallagherMifareClassic, CAD_AID, CREDENTIAL_AID,
-    CREDENTIAL_KEY_A, CREDENTIAL_KEY_B,
+    write_credential_to_sector, GallagherMifareClassic, CAD_AID, CREDENTIAL_AID, CREDENTIAL_KEY_A,
+    CREDENTIAL_KEY_B,
 };
 use gallagher_rfid_core::mifare::application_directory::{
     MadAid, MadVersion, MifareApplicationDirectory, NonMadSector,
@@ -62,7 +62,7 @@ impl KeyProvider for WriteKeyProvider {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let command = args.get(1).map(String::as_str).unwrap_or("read");
+    let command = args.get(1).map_or("read", String::as_str);
 
     let context = SmartCardContext::establish().unwrap();
     let readers: Vec<SmartCardReader> = context.get_readers().unwrap().collect();
@@ -88,13 +88,13 @@ fn main() {
         }
         "write" => {
             let credential = GallagherCredential::new(
-                1,      // region code A
-                123,    // facility code
-                123456, // card number
-                1,      // issue level
+                1,       // region code A
+                123,     // facility code
+                123_456, // card number
+                1,       // issue level
             )
             .unwrap();
-            write_gallagher_tag(&mut card, &credential);
+            write_gallagher_tag(&mut card, credential);
             println!("Write complete.");
         }
         _ => {
@@ -109,7 +109,7 @@ fn read_gallagher_tag<T: Tag>(tag: &mut T) {
     let mad = match MifareApplicationDirectory::read_from_tag(tag, &ReadKeyProvider) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("MAD read failed: {:?}", e);
+            eprintln!("MAD read failed: {e:?}");
             return;
         }
     };
@@ -123,7 +123,11 @@ fn read_gallagher_tag<T: Tag>(tag: &mut T) {
     }
     println!("  Applications:");
     for (sector, aid) in mad.iter_applications() {
-        println!("    Sector {:>2} -> AID 0x{:04X}", u8::from(sector), aid.to_u16());
+        println!(
+            "    Sector {:>2} -> AID 0x{:04X}",
+            u8::from(sector),
+            aid.to_u16()
+        );
     }
 
     // --- CAD ---
@@ -142,10 +146,10 @@ fn read_gallagher_tag<T: Tag>(tag: &mut T) {
             match CardApplicationDirectory::read_from_tag(tag, sector, &ReadKeyProvider) {
                 Ok(cad) => {
                     for ((rc, fc), cred_sector) in &cad.mappings {
-                        println!("  RC {:>2} FC {:>5} -> sector {}", rc, fc, cred_sector);
+                        println!("  RC {rc:>2} FC {fc:>5} -> sector {cred_sector}");
                     }
                 }
-                Err(e) => eprintln!("  CAD read failed: {:?}", e),
+                Err(e) => eprintln!("  CAD read failed: {e:?}"),
             }
         }
     }
@@ -169,19 +173,22 @@ fn read_gallagher_tag<T: Tag>(tag: &mut T) {
                 );
             }
         }
-        Err(e) => eprintln!("  Credential read failed: {:?}", e),
+        Err(e) => eprintln!("  Credential read failed: {e:?}"),
     }
 }
 
-fn write_gallagher_tag<T: Tag>(tag: &mut T, credential: &GallagherCredential) {
+fn write_gallagher_tag<T: Tag>(tag: &mut T, credential: GallagherCredential) {
     let cad_non_mad = NonMadSector::try_from(Sector::from(CAD_SECTOR)).unwrap();
     let cred_non_mad = NonMadSector::try_from(Sector::from(CREDENTIAL_SECTOR)).unwrap();
 
-    println!("Writing credential to sector {}...", CREDENTIAL_SECTOR as u8);
+    println!(
+        "Writing credential to sector {}...",
+        CREDENTIAL_SECTOR as u8
+    );
     write_credential_to_sector(
         tag,
         CREDENTIAL_SECTOR,
-        credential,
+        &credential,
         &WriteKeyProvider,
         &CREDENTIAL_KEY_A,
         &CREDENTIAL_KEY_B,
@@ -193,7 +200,8 @@ fn write_gallagher_tag<T: Tag>(tag: &mut T, credential: &GallagherCredential) {
         (credential.region_code, credential.facility_code),
         CREDENTIAL_SECTOR as u8,
     )]);
-    cad.write_to_tag(tag, CAD_SECTOR, &WriteKeyProvider).unwrap();
+    cad.write_to_tag(tag, CAD_SECTOR, &WriteKeyProvider)
+        .unwrap();
 
     println!("Writing MAD to sector 0...");
     let mad = MifareApplicationDirectory::new(
