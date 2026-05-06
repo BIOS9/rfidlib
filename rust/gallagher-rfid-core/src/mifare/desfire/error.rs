@@ -9,6 +9,12 @@ pub enum Error {
     MalformedResponse,
     /// A wrapped APDU response did not contain the `DESFire` status marker.
     InvalidWrappedResponse,
+    /// The caller-provided response buffer was too small for the card data.
+    ResponseTooLong,
+    /// The card returned too many continuation frames for one command.
+    TooManyAdditionalFrames,
+    /// A successful response did not have the expected shape for the command.
+    InvalidResponseLength,
     /// The card returned a non-success `DESFire` status.
     Status(Status),
     /// An application identifier exceeded the `DESFire` 24-bit AID range.

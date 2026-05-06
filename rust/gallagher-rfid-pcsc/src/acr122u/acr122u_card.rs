@@ -1,6 +1,7 @@
 use gallagher_rfid_core::mifare::{
     self,
     classic::{Block, KeyType, Sector, Tag},
+    desfire::{self, Frame, Transport},
 };
 
 use crate::smart_card::{self, SmartCard};
@@ -130,5 +131,18 @@ impl Tag for Acr122uCard {
                 "Invalid response when writing block {block}",
             ))),
         }
+    }
+}
+
+impl Transport for Acr122uCard {
+    fn transceive(&mut self, tx: &[u8], rx: &mut Frame) -> Result<(), desfire::Error> {
+        let response = self
+            .smart_card
+            .transmit_apdu(tx)
+            .map_err(|_| desfire::Error::Transport)?;
+
+        rx.clear();
+        rx.extend_from_slice(&response)
+            .map_err(|_| desfire::Error::ResponseTooLong)
     }
 }

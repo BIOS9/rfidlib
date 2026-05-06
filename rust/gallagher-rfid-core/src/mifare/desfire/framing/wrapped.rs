@@ -15,13 +15,19 @@ impl FrameCodec for WrappedFraming {
         let payload_len = u8::try_from(command.data().len()).map_err(|_| Error::CommandTooLong)?;
 
         frame.clear();
-        frame
-            .extend_from_slice(&[0x90, command.code().as_byte(), 0x00, 0x00, payload_len])
-            .map_err(|_| Error::CommandTooLong)?;
-        frame
-            .extend_from_slice(command.data())
-            .map_err(|_| Error::CommandTooLong)?;
-        frame.push(0x00).map_err(|_| Error::CommandTooLong)
+        if command.data().is_empty() {
+            frame
+                .extend_from_slice(&[0x90, command.code().as_byte(), 0x00, 0x00, 0x00])
+                .map_err(|_| Error::CommandTooLong)
+        } else {
+            frame
+                .extend_from_slice(&[0x90, command.code().as_byte(), 0x00, 0x00, payload_len])
+                .map_err(|_| Error::CommandTooLong)?;
+            frame
+                .extend_from_slice(command.data())
+                .map_err(|_| Error::CommandTooLong)?;
+            frame.push(0x00).map_err(|_| Error::CommandTooLong)
+        }
     }
 
     fn decode(&self, frame: &[u8], response: &mut Response) -> Result<(), Error> {
@@ -59,6 +65,16 @@ mod tests {
             frame.as_slice(),
             &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03, 0x00]
         );
+    }
+
+    #[test]
+    fn encodes_wrapped_command_without_payload() {
+        let command = Command::new(CommandCode::GET_VERSION, &[]).unwrap();
+        let mut frame = Frame::new();
+
+        WrappedFraming.encode(&command, &mut frame).unwrap();
+
+        assert_eq!(frame.as_slice(), &[0x90, 0x60, 0x00, 0x00, 0x00]);
     }
 
     #[test]

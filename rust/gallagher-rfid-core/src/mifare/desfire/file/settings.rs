@@ -1,4 +1,4 @@
-use crate::mifare::desfire::{error::Error, file::AccessRights};
+use crate::mifare::desfire::{error::Error, file::AccessRights, types::U24};
 
 /// `DESFire` file communication mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,7 @@ pub struct FileSettings {
     file_type: FileType,
     communication_mode: CommunicationMode,
     access_rights: AccessRights,
+    details: FileSettingsDetails,
 }
 
 impl FileSettings {
@@ -82,12 +83,55 @@ impl FileSettings {
         file_type: FileType,
         communication_mode: CommunicationMode,
         access_rights: AccessRights,
+        details: FileSettingsDetails,
     ) -> Self {
         Self {
             file_type,
             communication_mode,
             access_rights,
+            details,
         }
+    }
+
+    /// Parses the `GetFileSettings` response body.
+    pub fn parse(data: &[u8]) -> Result<Self, Error> {
+        if data.len() < 4 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let file_type = FileType::try_from(data[0])?;
+        let communication_mode = CommunicationMode::try_from(data[1])?;
+        let access_rights = AccessRights::from_bytes([data[2], data[3]]);
+
+        let details = match file_type {
+            FileType::StandardData | FileType::BackupData => {
+                let size = parse_u24(data, 4)?;
+                FileSettingsDetails::Data { size }
+            }
+            FileType::Value => {
+                if data.len() < 17 {
+                    return Err(Error::InvalidResponseLength);
+                }
+                FileSettingsDetails::Value {
+                    lower_limit: parse_i32(data, 4)?,
+                    upper_limit: parse_i32(data, 8)?,
+                    limited_credit_value: parse_i32(data, 12)?,
+                    limited_credit_enabled: data[16] != 0,
+                }
+            }
+            FileType::LinearRecord | FileType::CyclicRecord => FileSettingsDetails::Record {
+                record_size: parse_u24(data, 4)?,
+                max_records: parse_u24(data, 7)?,
+                current_records: parse_u24(data, 10)?,
+            },
+        };
+
+        Ok(Self::new(
+            file_type,
+            communication_mode,
+            access_rights,
+            details,
+        ))
     }
 
     /// `DESFire` file type.
@@ -103,5 +147,97 @@ impl FileSettings {
     /// File access rights.
     pub const fn access_rights(self) -> AccessRights {
         self.access_rights
+    }
+
+    /// Type-specific file settings.
+    pub const fn details(self) -> FileSettingsDetails {
+        self.details
+    }
+}
+
+/// Type-specific `DESFire` file settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSettingsDetails {
+    Data {
+        size: U24,
+    },
+    Value {
+        lower_limit: i32,
+        upper_limit: i32,
+        limited_credit_value: i32,
+        limited_credit_enabled: bool,
+    },
+    Record {
+        record_size: U24,
+        max_records: U24,
+        current_records: U24,
+    },
+}
+
+fn parse_u24(data: &[u8], offset: usize) -> Result<U24, Error> {
+    let bytes = data
+        .get(offset..offset + 3)
+        .ok_or(Error::InvalidResponseLength)?
+        .try_into()
+        .expect("slice length is checked");
+    Ok(U24::from_le_bytes(bytes))
+}
+
+fn parse_i32(data: &[u8], offset: usize) -> Result<i32, Error> {
+    let bytes = data
+        .get(offset..offset + 4)
+        .ok_or(Error::InvalidResponseLength)?
+        .try_into()
+        .expect("slice length is checked");
+    Ok(i32::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mifare::desfire::{
+        file::{AccessCondition, CommunicationMode, FileSettings, FileSettingsDetails, FileType},
+        key::KeyNumber,
+        types::U24,
+    };
+
+    #[test]
+    fn parses_standard_data_file_settings() {
+        let settings = FileSettings::parse(&[0x00, 0x00, 0x12, 0xE3, 0x34, 0x12, 0x00]).unwrap();
+
+        assert_eq!(settings.file_type(), FileType::StandardData);
+        assert_eq!(settings.communication_mode(), CommunicationMode::Plain);
+        assert_eq!(
+            settings.access_rights().read_write(),
+            AccessCondition::Key(KeyNumber::new(1).unwrap())
+        );
+        assert_eq!(settings.access_rights().read(), AccessCondition::Free);
+        assert_eq!(
+            settings.details(),
+            FileSettingsDetails::Data {
+                size: U24::new(0x1234).unwrap()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_record_file_settings() {
+        let settings = FileSettings::parse(&[
+            0x03, 0x03, 0xEE, 0xEF, 0x10, 0x00, 0x00, 0x20, 0x00, 0x00, 0x03, 0x00, 0x00,
+        ])
+        .unwrap();
+
+        assert_eq!(settings.file_type(), FileType::LinearRecord);
+        assert_eq!(settings.communication_mode(), CommunicationMode::Enciphered);
+        assert_eq!(settings.access_rights().read_write(), AccessCondition::Free);
+        assert_eq!(settings.access_rights().change(), AccessCondition::Free);
+        assert_eq!(settings.access_rights().write(), AccessCondition::Never);
+        assert_eq!(
+            settings.details(),
+            FileSettingsDetails::Record {
+                record_size: U24::new(16).unwrap(),
+                max_records: U24::new(32).unwrap(),
+                current_records: U24::new(3).unwrap()
+            }
+        );
     }
 }
