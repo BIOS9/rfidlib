@@ -3,15 +3,18 @@ use heapless::Vec;
 use crate::mifare::desfire::{
     application::ApplicationId,
     command::{Command, CommandCode},
-    crypto::{aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, AesSessionKey, RndA, RndB},
+    crypto::{
+        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, desfire_crc32, AesSessionKey,
+        DesfireMac, RndA, RndB,
+    },
     error::Error,
     executor::Executor,
     file::{FileId, FileSettings},
     framing::FrameCodec,
     key::{KeyNumber, KeySettings},
-    session::AuthenticatedSession,
+    session::{AuthenticatedSession, Session, SessionKey},
     status::Status,
-    transport::Transport,
+    transport::{Transport, MAX_FRAME_SIZE},
     types::U24,
     version::VersionInfo,
 };
@@ -19,6 +22,7 @@ use crate::mifare::desfire::{
 /// High-level `DESFire` command client.
 pub struct Desfire<T, C> {
     executor: Executor<T, C>,
+    session: Session,
 }
 
 impl<T, C> Desfire<T, C>
@@ -30,12 +34,16 @@ where
     pub const fn new(transport: T, codec: C) -> Self {
         Self {
             executor: Executor::new(transport, codec),
+            session: Session::Unauthenticated,
         }
     }
 
     /// Creates a client from an existing executor.
     pub const fn from_executor(executor: Executor<T, C>) -> Self {
-        Self { executor }
+        Self {
+            executor,
+            session: Session::Unauthenticated,
+        }
     }
 
     /// Returns a shared reference to the command executor.
@@ -53,6 +61,24 @@ where
         self.executor
     }
 
+    /// Current authentication/session state.
+    pub const fn session(&self) -> Session {
+        self.session
+    }
+
+    /// Authenticated session state, when authentication has succeeded.
+    pub const fn authenticated_session(&self) -> Option<AuthenticatedSession> {
+        match self.session {
+            Session::Unauthenticated => None,
+            Session::Authenticated(session) => Some(session),
+        }
+    }
+
+    /// Clears any authenticated session state held by this client.
+    pub const fn clear_session(&mut self) {
+        self.session = Session::Unauthenticated;
+    }
+
     /// Reads and parses the card version information.
     pub fn get_version(&mut self) -> Result<VersionInfo, Error> {
         let command = Command::new(CommandCode::GET_VERSION, &[])?;
@@ -64,8 +90,7 @@ where
 
     /// Performs legacy AES authentication with caller-provided reader randomness.
     ///
-    /// This establishes the session key but does not yet enable `MACed` or
-    /// enciphered secure messaging for later commands.
+    /// This stores the session key and initializes secure-messaging state.
     pub fn authenticate_aes_with_rnd_a(
         &mut self,
         key_number: KeyNumber,
@@ -110,7 +135,9 @@ where
         }
 
         let session_key = AesSessionKey::derive(rnd_a, rnd_b);
-        Ok(AuthenticatedSession::new_aes(key_number, session_key))
+        let session = AuthenticatedSession::new_aes(key_number, session_key);
+        self.session = Session::Authenticated(session);
+        Ok(session)
     }
 
     /// Reads key settings for the currently selected application.
@@ -149,7 +176,9 @@ where
         let command = Command::new(CommandCode::SELECT_APPLICATION, &application_id.as_bytes())?;
         let mut data: Vec<u8, 0> = Vec::new();
 
-        self.executor.execute(&command, &mut data)
+        self.executor.execute(&command, &mut data)?;
+        self.clear_session();
+        Ok(())
     }
 
     /// Reads all application identifiers returned by the card.
@@ -181,7 +210,12 @@ where
         let command = Command::new(CommandCode::GET_FILE_SETTINGS, &[file_id.as_byte()])?;
         let mut data: Vec<u8, 32> = Vec::new();
 
-        self.executor.execute(&command, &mut data)?;
+        if matches!(self.session, Session::Authenticated(_)) {
+            self.execute_single_maced(&command, &mut data)?;
+        } else {
+            self.executor.execute(&command, &mut data)?;
+        }
+
         FileSettings::parse(data.as_slice())
     }
 
@@ -193,20 +227,178 @@ where
         length: U24,
         data: &mut Vec<u8, N>,
     ) -> Result<(), Error> {
-        let mut command_data: Vec<u8, 7> = Vec::new();
-        command_data
-            .push(file_id.as_byte())
-            .map_err(|_| Error::CommandTooLong)?;
-        command_data
-            .extend_from_slice(&offset.to_le_bytes())
-            .map_err(|_| Error::CommandTooLong)?;
-        command_data
-            .extend_from_slice(&length.to_le_bytes())
-            .map_err(|_| Error::CommandTooLong)?;
-
+        let command_data = read_data_command_data(file_id, offset, length)?;
         let command = Command::new(CommandCode::READ_DATA, command_data.as_slice())?;
         self.executor.execute(&command, data)
     }
+
+    /// Reads and decrypts bytes from an enciphered standard or backup data file.
+    ///
+    /// A `length` of zero is passed through to the card and the plaintext length
+    /// is inferred from the encrypted response CRC and zero padding.
+    pub fn read_data_enciphered<const N: usize>(
+        &mut self,
+        file_id: FileId,
+        offset: U24,
+        length: U24,
+        data: &mut Vec<u8, N>,
+    ) -> Result<(), Error> {
+        let command_data = read_data_command_data(file_id, offset, length)?;
+        let command = Command::new(CommandCode::READ_DATA, command_data.as_slice())?;
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        session.update_command_cmac(command.code(), command.data())?;
+        let iv = session.cmac_chaining().state();
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() < 16 || !response.data().len().is_multiple_of(16) {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let SessionKey::Aes(session_key) = session.session_key();
+        let mut decrypted: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        decrypted
+            .extend_from_slice(response.data())
+            .map_err(|_| Error::ResponseTooLong)?;
+        let last_ciphertext_block: [u8; 16] = response.data()[response.data().len() - 16..]
+            .try_into()
+            .expect("slice length is checked");
+
+        aes_cbc_decrypt_in_place(&session_key.as_bytes(), &iv, decrypted.as_mut_slice());
+        let plaintext_len = encrypted_read_plaintext_len(
+            decrypted.as_slice(),
+            usize::try_from(length.as_u32()).expect("U24 fits in usize"),
+            response.status(),
+        )?;
+
+        data.clear();
+        data.extend_from_slice(&decrypted.as_slice()[..plaintext_len])
+            .map_err(|_| Error::ResponseTooLong)?;
+
+        session.set_chaining_state(last_ciphertext_block);
+        self.session = Session::Authenticated(session);
+        Ok(())
+    }
+
+    fn execute_single_maced<const N: usize>(
+        &mut self,
+        command: &Command,
+        data: &mut Vec<u8, N>,
+    ) -> Result<(), Error> {
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        session.update_command_cmac(command.code(), command.data())?;
+        let response = self.executor.exchange_one(command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+
+        let body = verify_response_mac(&mut session, response.status(), response.data())?;
+        data.clear();
+        data.extend_from_slice(body)
+            .map_err(|_| Error::ResponseTooLong)?;
+
+        self.session = Session::Authenticated(session);
+        Ok(())
+    }
+}
+
+fn read_data_command_data(file_id: FileId, offset: U24, length: U24) -> Result<Vec<u8, 7>, Error> {
+    let mut command_data: Vec<u8, 7> = Vec::new();
+    command_data
+        .push(file_id.as_byte())
+        .map_err(|_| Error::CommandTooLong)?;
+    command_data
+        .extend_from_slice(&offset.to_le_bytes())
+        .map_err(|_| Error::CommandTooLong)?;
+    command_data
+        .extend_from_slice(&length.to_le_bytes())
+        .map_err(|_| Error::CommandTooLong)?;
+    Ok(command_data)
+}
+
+fn verify_response_mac<'a>(
+    session: &mut AuthenticatedSession,
+    status: Status,
+    data: &'a [u8],
+) -> Result<&'a [u8], Error> {
+    if data.len() < 8 {
+        return Err(Error::InvalidResponseLength);
+    }
+
+    let (body, mac) = data.split_at(data.len() - 8);
+    let mac = DesfireMac::new(mac.try_into().expect("split size is checked"));
+    if session.update_response_cmac(status, body)? != mac {
+        return Err(Error::InvalidMac);
+    }
+
+    Ok(body)
+}
+
+fn encrypted_read_plaintext_len(
+    decrypted: &[u8],
+    requested_length: usize,
+    status: Status,
+) -> Result<usize, Error> {
+    if requested_length == 0 {
+        return infer_encrypted_read_plaintext_len(decrypted, status);
+    }
+
+    validate_encrypted_read_plaintext_len(decrypted, requested_length, status)
+}
+
+fn infer_encrypted_read_plaintext_len(decrypted: &[u8], status: Status) -> Result<usize, Error> {
+    for plaintext_len in (0..=decrypted.len().saturating_sub(4)).rev() {
+        if validate_encrypted_read_plaintext_len(decrypted, plaintext_len, status).is_ok() {
+            return Ok(plaintext_len);
+        }
+    }
+
+    Err(Error::InvalidCrc)
+}
+
+fn validate_encrypted_read_plaintext_len(
+    decrypted: &[u8],
+    plaintext_len: usize,
+    status: Status,
+) -> Result<usize, Error> {
+    let crc_start = plaintext_len;
+    let crc_end = crc_start + 4;
+    if crc_end > decrypted.len() {
+        return Err(Error::InvalidResponseLength);
+    }
+
+    if !has_valid_encrypted_response_padding(&decrypted[crc_end..]) {
+        return Err(Error::InvalidPadding);
+    }
+
+    let mut crc_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+    crc_data
+        .extend_from_slice(&decrypted[..plaintext_len])
+        .map_err(|_| Error::ResponseTooLong)?;
+    crc_data
+        .push(status.as_byte())
+        .map_err(|_| Error::ResponseTooLong)?;
+
+    if desfire_crc32(crc_data.as_slice()) != decrypted[crc_start..crc_end] {
+        return Err(Error::InvalidCrc);
+    }
+
+    Ok(plaintext_len)
+}
+
+fn has_valid_encrypted_response_padding(padding: &[u8]) -> bool {
+    let Some((&first, rest)) = padding.split_first() else {
+        return true;
+    };
+
+    first == 0x80 && rest.iter().all(|&byte| byte == 0)
 }
 
 fn parse_application_ids<const N: usize>(
@@ -247,10 +439,10 @@ mod tests {
         client::Desfire,
         crypto::{aes_cbc_encrypt_in_place, AesSessionKey, RndA, RndB},
         error::Error,
-        file::{FileId, FileSettingsDetails},
+        file::{CommunicationMode, FileId, FileSettingsDetails},
         framing::{NativeFraming, WrappedFraming},
         key::{ApplicationKeyType, KeyNumber},
-        session::SessionKey,
+        session::{Session, SessionKey},
         transport::{Frame, Transport},
         types::U24,
     };
@@ -412,10 +604,15 @@ mod tests {
         first_response_padded[..17].copy_from_slice(&first_response);
         let mut second_response_padded = [0u8; 33];
         second_response_padded[..17].copy_from_slice(&second_response);
+        let mut select_command = [0u8; 33];
+        select_command[..4].copy_from_slice(&[0x5A, 0x56, 0x34, 0x12]);
+        let mut select_response = [0u8; 33];
+        select_response[0] = 0x00;
 
         let transport = OwnedMockTransport::new([
             (first_command, 2, first_response_padded, 17),
             (second_command, 33, second_response_padded, 17),
+            (select_command, 4, select_response, 1),
         ]);
         let mut desfire = Desfire::new(transport, NativeFraming);
 
@@ -428,6 +625,15 @@ mod tests {
             session.session_key(),
             SessionKey::Aes(AesSessionKey::derive(rnd_a, rnd_b))
         );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.authenticated_session(), Some(session));
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x12_34_56).unwrap())
+            .unwrap();
+
+        assert_eq!(desfire.session(), Session::Unauthenticated);
+        assert_eq!(desfire.authenticated_session(), None);
     }
 
     #[test]
@@ -523,6 +729,104 @@ mod tests {
         assert_eq!(
             session.session_key(),
             SessionKey::Aes(AesSessionKey::new(expected_session_key))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+    }
+
+    #[test]
+    fn reads_enciphered_data_from_wrapped_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x33, 0x22, 0x11, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xAA, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0x96, 0x4A, 0x05, 0x8E, 0x52, 0xA2, 0xB3, 0x15, 0x72, 0x89, 0x39, 0x34, 0x90,
+                    0x27, 0x93, 0x68, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0x05, 0x7A, 0x57, 0x88, 0x36, 0xC1, 0x5C, 0x8F,
+                    0x9E, 0x69, 0x1B, 0xE2, 0x7C, 0xCC, 0x6F, 0x70, 0x7F, 0xBF, 0x6D, 0x36, 0x1F,
+                    0xC0, 0x6D, 0x5E, 0x69, 0x20, 0x3C, 0x87, 0xE9, 0x7B, 0x44, 0x55, 0x00,
+                ][..],
+                &[
+                    0x70, 0xA4, 0x01, 0xC7, 0x5A, 0xF6, 0xF8, 0xDB, 0xE8, 0x65, 0x2C, 0x1C, 0x50,
+                    0x0D, 0xCE, 0xAF, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00, 0x2C, 0x90, 0x88, 0x7A, 0x35, 0x22,
+                    0xDE, 0xC3, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xBD, 0x00, 0x00, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                ][..],
+                &[
+                    0x8E, 0x2D, 0x96, 0x48, 0x75, 0xDC, 0x9E, 0xC2, 0x55, 0x32, 0x93, 0xEF, 0x12,
+                    0x37, 0x3A, 0x05, 0x85, 0xB7, 0x64, 0x05, 0x12, 0xE9, 0x55, 0xAE, 0xFB, 0xC0,
+                    0x20, 0x76, 0x9E, 0xA4, 0xCC, 0xC7, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        let mut data: Vec<u8, 32> = Vec::new();
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x11_22_33).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_aes_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Aes(AesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xEB, 0x8D, 0x9B, 0xE8, 0x13, 0x14, 0x15, 0x16, 0xBE, 0xBB,
+                0x9B, 0x4A,
+            ]))
+        );
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x01).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Enciphered);
+        assert_eq!(
+            settings.details(),
+            FileSettingsDetails::Data {
+                size: U24::new(16).unwrap()
+            }
+        );
+
+        desfire
+            .read_data_enciphered(
+                FileId::new(0x01).unwrap(),
+                U24::new(0).unwrap(),
+                U24::new(0).unwrap(),
+                &mut data,
+            )
+            .unwrap();
+
+        assert_eq!(
+            data.as_slice(),
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+                0x0E, 0x0F
+            ]
         );
     }
 

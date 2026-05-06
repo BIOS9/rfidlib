@@ -136,11 +136,16 @@ impl AesCmac {
 pub struct DesfireMac([u8; 8]);
 
 impl DesfireMac {
+    /// Creates an 8-byte `DESFire` MAC from raw bytes.
+    pub const fn new(bytes: [u8; 8]) -> Self {
+        Self(bytes)
+    }
+
     /// Creates the truncated `DESFire` MAC from a full CMAC.
     pub const fn from_cmac(cmac: AesCmac) -> Self {
         let bytes = cmac.as_bytes();
         Self([
-            bytes[1], bytes[3], bytes[5], bytes[7], bytes[9], bytes[11], bytes[13], bytes[15],
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ])
     }
 
@@ -160,6 +165,11 @@ impl AesCmacChaining {
     /// Creates zeroed CMAC chaining state for a fresh authenticated session.
     pub const fn new() -> Self {
         Self { state: [0u8; 16] }
+    }
+
+    /// Creates CMAC chaining state from a known full 16-byte value.
+    pub const fn from_state(state: [u8; 16]) -> Self {
+        Self { state }
     }
 
     /// Current full CMAC chaining state.
@@ -184,6 +194,24 @@ impl Default for AesCmacChaining {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Calculates the CRC32 variant used inside encrypted `DESFire` EV1 responses.
+pub fn desfire_crc32(data: &[u8]) -> [u8; 4] {
+    let mut crc = 0xFFFF_FFFF;
+
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            if crc & 1 == 0 {
+                crc >>= 1;
+            } else {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            }
+        }
+    }
+
+    crc.to_le_bytes()
 }
 
 /// Decrypts one AES-CBC block sequence in place.
@@ -275,8 +303,8 @@ fn xor_block(block: &mut [u8], mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use crate::mifare::desfire::crypto::{
-        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, AesCmac, AesCmacChaining,
-        AesSessionKey, RndA, RndB,
+        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, desfire_crc32, AesCmac,
+        AesCmacChaining, AesSessionKey, RndA, RndB,
     };
 
     #[test]
@@ -399,22 +427,35 @@ mod tests {
     }
 
     #[test]
-    fn desfire_mac_uses_odd_cmac_bytes() {
+    fn desfire_mac_uses_first_eight_cmac_bytes() {
         let cmac = AesCmac::calculate(&[0x11; 16], &[0x22; 7]);
 
         assert_eq!(
             cmac.desfire_mac().as_bytes(),
             [
+                cmac.as_bytes()[0],
                 cmac.as_bytes()[1],
+                cmac.as_bytes()[2],
                 cmac.as_bytes()[3],
+                cmac.as_bytes()[4],
                 cmac.as_bytes()[5],
+                cmac.as_bytes()[6],
                 cmac.as_bytes()[7],
-                cmac.as_bytes()[9],
-                cmac.as_bytes()[11],
-                cmac.as_bytes()[13],
-                cmac.as_bytes()[15],
             ]
         );
+    }
+
+    #[test]
+    fn desfire_crc32_matches_encrypted_read_trace() {
+        let mut data = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x00,
+        ];
+
+        assert_eq!(desfire_crc32(&data), [0x82, 0xD5, 0x50, 0xCE]);
+
+        data[16] = 0xAF;
+        assert_ne!(desfire_crc32(&data), [0x82, 0xD5, 0x50, 0xCE]);
     }
 
     #[test]
