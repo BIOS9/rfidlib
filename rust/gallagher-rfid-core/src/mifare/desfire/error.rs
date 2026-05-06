@@ -17,6 +17,14 @@ pub enum Error {
     InvalidResponseLength,
     /// AES authentication failed because the card did not prove knowledge of the key.
     AuthenticationFailed,
+    /// A secure-messaging command requires prior authentication.
+    MissingAuthentication,
+    /// A response MAC did not match the active authenticated session.
+    InvalidMac,
+    /// An encrypted response CRC did not match the decrypted payload.
+    InvalidCrc,
+    /// An encrypted response did not contain valid zero padding.
+    InvalidPadding,
     /// The card returned a non-success `DESFire` status.
     Status(Status),
     /// An application identifier exceeded the `DESFire` 24-bit AID range.
