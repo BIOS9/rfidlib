@@ -515,7 +515,11 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
 
     for (file_id, settings) in file_settings {
         let Some(settings) = settings else { continue };
-        if settings.communication_mode() != CommunicationMode::Enciphered {
+        let mode = settings.communication_mode();
+        if !matches!(
+            mode,
+            CommunicationMode::Maced | CommunicationMode::Enciphered
+        ) {
             continue;
         }
         let FileSettingsDetails::Data { size } = settings.details() else {
@@ -536,22 +540,37 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
 
         let mut data: HeaplessVec<u8, 256> = HeaplessVec::new();
         let offset = U24::new(0).unwrap();
-        match desfire.read_data_enciphered(*file_id, offset, size, &mut data) {
-            Ok(()) => println!(
-                "    File {} (encrypted): {:02X?}",
-                file_id.as_byte(),
-                data.as_slice()
-            ),
-            Err(error) => {
-                eprintln!(
-                    "    File {} ReadDataEnciphered failed: {error:?}",
-                    file_id.as_byte()
-                );
+        match mode {
+            CommunicationMode::Maced => {
+                match desfire.read_data_maced(*file_id, offset, size, &mut data) {
+                    Ok(()) => println!(
+                        "    File {} (maced): {:02X?}",
+                        file_id.as_byte(),
+                        data.as_slice()
+                    ),
+                    Err(error) => eprintln!(
+                        "    File {} ReadDataMaced failed: {error:?}",
+                        file_id.as_byte()
+                    ),
+                }
             }
-        }
-
-        if args.debug_read {
-            debug_encrypted_read(desfire, *file_id, size);
+            CommunicationMode::Enciphered => {
+                match desfire.read_data_enciphered(*file_id, offset, size, &mut data) {
+                    Ok(()) => println!(
+                        "    File {} (encrypted): {:02X?}",
+                        file_id.as_byte(),
+                        data.as_slice()
+                    ),
+                    Err(error) => eprintln!(
+                        "    File {} ReadDataEnciphered failed: {error:?}",
+                        file_id.as_byte()
+                    ),
+                }
+                if args.debug_read {
+                    debug_encrypted_read(desfire, *file_id, size);
+                }
+            }
+            CommunicationMode::Plain => unreachable!(),
         }
     }
 }
