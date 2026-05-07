@@ -15,6 +15,10 @@ impl Acr122uCard {
         Acr122uCard { smart_card }
     }
 
+    pub fn reset_card(&mut self) -> Result<(), smart_card::Error> {
+        self.smart_card.reset_card()
+    }
+
     pub fn blink(&mut self) -> Result<(), smart_card::Error> {
         let blink = b"\xFF\x00\x40\x50\x04\x05\x05\x03\x01";
 

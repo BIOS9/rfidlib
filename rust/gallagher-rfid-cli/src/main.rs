@@ -89,6 +89,9 @@ fn main() {
 
     let acr122u = Acr122uReader::try_from(reader).unwrap();
     let mut card = acr122u.connect_to_card().unwrap();
+    if let Err(error) = card.reset_card() {
+        eprintln!("Warning: card reset failed: {error}");
+    }
     card.set_card_detect_beep(false).unwrap();
 
     match command {
@@ -345,6 +348,10 @@ fn write_gallagher_tag<T: Tag>(tag: &mut T, credential: GallagherCredential) {
 
 fn read_desfire_tag<T: Transport>(transport: T, args: &DesfireArgs) {
     let mut desfire = Desfire::new(transport, WrappedFraming);
+
+    // Abort any in-progress AF sequence from a previous run without card removal.
+    // SELECT_APPLICATION(PICC) causes the card to discard pending multi-frame state and auth.
+    let _ = desfire.select_application(ApplicationId::PICC);
 
     println!("=== DESFire ===");
     match desfire.get_version() {
