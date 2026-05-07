@@ -135,6 +135,7 @@ struct DesfireArgs {
     aid_filter: Option<ApplicationId>,
     auth: Option<AesAuthSpec>,
     debug_read: bool,
+    write: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,6 +148,7 @@ fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
     let mut aid_filter: Option<ApplicationId> = None;
     let mut auth: Option<AesAuthSpec> = None;
     let mut debug_read = false;
+    let mut write = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -165,6 +167,9 @@ fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
             "--debug-read" => {
                 debug_read = true;
             }
+            "--write" => {
+                write = true;
+            }
             other => return Err(format!("unknown option: {other}")),
         }
     }
@@ -172,6 +177,7 @@ fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
         aid_filter,
         auth,
         debug_read,
+        write,
     })
 }
 
@@ -231,6 +237,12 @@ fn random_rnd_a() -> std::io::Result<RndA> {
     let mut bytes = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(RndA::new(bytes))
+}
+
+fn random_bytes(len: usize) -> std::io::Result<Vec<u8>> {
+    let mut bytes = vec![0u8; len];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn read_gallagher_tag<T: Tag>(tag: &mut T) {
@@ -522,13 +534,6 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
 
     for (file_id, settings) in file_settings {
         let Some(settings) = settings else { continue };
-        let mode = settings.communication_mode();
-        if !matches!(
-            mode,
-            CommunicationMode::Maced | CommunicationMode::Enciphered
-        ) {
-            continue;
-        }
         let FileSettingsDetails::Data { size } = settings.details() else {
             continue;
         };
@@ -547,7 +552,22 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
 
         let mut data: HeaplessVec<u8, 256> = HeaplessVec::new();
         let offset = U24::new(0).unwrap();
-        match mode {
+        match settings.communication_mode() {
+            CommunicationMode::Plain => {
+                // When authenticated, the card sends a response MAC for plain files too.
+                // Using read_data_maced keeps our CMAC state in sync with the card.
+                match desfire.read_data_maced(*file_id, offset, size, &mut data) {
+                    Ok(()) => println!(
+                        "    File {} (plain, auth): {:02X?}",
+                        file_id.as_byte(),
+                        data.as_slice()
+                    ),
+                    Err(error) => eprintln!(
+                        "    File {} ReadData(auth) failed: {error:?}",
+                        file_id.as_byte()
+                    ),
+                }
+            }
             CommunicationMode::Maced => {
                 match desfire.read_data_maced(*file_id, offset, size, &mut data) {
                     Ok(()) => println!(
@@ -577,7 +597,68 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
                     debug_encrypted_read(desfire, *file_id, size);
                 }
             }
-            CommunicationMode::Plain => unreachable!(),
+        }
+    }
+
+    if args.write {
+        run_aes_write_pass(desfire, file_settings);
+    }
+}
+
+fn run_aes_write_pass<T: Transport, C: FrameCodec>(
+    desfire: &mut Desfire<T, C>,
+    file_settings: &[(FileId, Option<FileSettings>)],
+) {
+    println!("\n  --- write pass ---");
+    for (file_id, settings) in file_settings {
+        let Some(settings) = settings else { continue };
+        let FileSettingsDetails::Data { size } = settings.details() else {
+            println!("    File {}: skipped (not a data file)", file_id.as_byte());
+            continue;
+        };
+        if size.as_u32() == 0 {
+            println!("    File {}: skipped (size=0)", file_id.as_byte());
+            continue;
+        }
+        if size.as_u32() > 256 {
+            println!(
+                "    File {}: skipped ({} bytes exceeds CLI limit)",
+                file_id.as_byte(),
+                size.as_u32()
+            );
+            continue;
+        }
+
+        let data = match random_bytes(size.as_u32() as usize) {
+            Ok(b) => b,
+            Err(error) => {
+                eprintln!(
+                    "    File {}: /dev/urandom failed: {error}",
+                    file_id.as_byte()
+                );
+                continue;
+            }
+        };
+
+        let offset = U24::new(0).unwrap();
+        let mode = settings.communication_mode();
+        let result = match mode {
+            CommunicationMode::Plain => desfire.write_data(*file_id, offset, &data),
+            CommunicationMode::Maced => desfire.write_data_maced(*file_id, offset, &data),
+            CommunicationMode::Enciphered => desfire.write_data_enciphered(*file_id, offset, &data),
+        };
+        match result {
+            Ok(()) => println!(
+                "    File {} ({}): wrote {:02X?}",
+                file_id.as_byte(),
+                communication_mode_name(mode),
+                data.as_slice()
+            ),
+            Err(error) => eprintln!(
+                "    File {} WriteData({}) failed: {error:?}",
+                file_id.as_byte(),
+                communication_mode_name(mode)
+            ),
         }
     }
 }
