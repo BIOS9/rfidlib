@@ -28,6 +28,7 @@ impl CommandCode {
     pub const FREE_MEM: Self = Self(0x6E);
     pub const GET_FILE_IDS: Self = Self(0x6F);
     pub const GET_FILE_SETTINGS: Self = Self(0xF5);
+    pub const CHANGE_FILE_SETTINGS: Self = Self(0x5F);
     pub const CREATE_STD_DATA_FILE: Self = Self(0xCD);
     pub const CREATE_BACKUP_DATA_FILE: Self = Self(0xCB);
     pub const CREATE_VALUE_FILE: Self = Self(0xCC);
