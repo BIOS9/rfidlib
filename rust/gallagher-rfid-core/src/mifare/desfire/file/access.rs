@@ -18,6 +18,15 @@ impl AccessCondition {
             _ => unreachable!("access condition is a four-bit value"),
         }
     }
+
+    /// Encodes this condition as a four-bit nibble.
+    pub fn to_nibble(self) -> u8 {
+        match self {
+            Self::Key(n) => n.as_byte(),
+            Self::Free => 0x0E,
+            Self::Never => 0x0F,
+        }
+    }
 }
 
 /// Access conditions for a `DESFire` file.
@@ -74,6 +83,14 @@ impl AccessRights {
     pub const fn change(self) -> AccessCondition {
         self.change
     }
+
+    /// Encodes access rights to the two-byte `DESFire` wire format.
+    pub fn to_bytes(self) -> [u8; 2] {
+        [
+            (self.read_write.to_nibble() << 4) | self.change.to_nibble(),
+            (self.read.to_nibble() << 4) | self.write.to_nibble(),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -82,6 +99,17 @@ mod tests {
         file::{AccessCondition, AccessRights},
         key::KeyNumber,
     };
+
+    #[test]
+    fn access_rights_round_trips_through_bytes() {
+        // from_bytes -> to_bytes must be identity.
+        for b0 in [0x0F_u8, 0x1F, 0xEF, 0xFF] {
+            for b1 in [0x00_u8, 0xE0, 0x81, 0xFF] {
+                let bytes = [b0, b1];
+                assert_eq!(AccessRights::from_bytes(bytes).to_bytes(), bytes);
+            }
+        }
+    }
 
     #[test]
     fn decodes_access_rights_bytes() {

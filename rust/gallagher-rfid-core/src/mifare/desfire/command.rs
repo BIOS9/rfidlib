@@ -19,10 +19,19 @@ impl CommandCode {
     pub const GET_KEY_VERSION: Self = Self(0x64);
     pub const GET_VERSION: Self = Self(0x60);
     pub const GET_APPLICATION_IDS: Self = Self(0x6A);
+    pub const FORMAT_PICC: Self = Self(0xFC);
+    pub const CREATE_APPLICATION: Self = Self(0xCA);
+    pub const DELETE_APPLICATION: Self = Self(0xDA);
     pub const SELECT_APPLICATION: Self = Self(0x5A);
     pub const FREE_MEM: Self = Self(0x6E);
     pub const GET_FILE_IDS: Self = Self(0x6F);
     pub const GET_FILE_SETTINGS: Self = Self(0xF5);
+    pub const CREATE_STD_DATA_FILE: Self = Self(0xCD);
+    pub const CREATE_BACKUP_DATA_FILE: Self = Self(0xCB);
+    pub const CREATE_VALUE_FILE: Self = Self(0xCC);
+    pub const CREATE_LINEAR_RECORD_FILE: Self = Self(0xC1);
+    pub const CREATE_CYCLIC_RECORD_FILE: Self = Self(0xC0);
+    pub const DELETE_FILE: Self = Self(0xDF);
     pub const READ_DATA: Self = Self(0xBD);
     pub const WRITE_DATA: Self = Self(0x3D);
 

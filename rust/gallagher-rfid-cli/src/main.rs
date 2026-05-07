@@ -14,9 +14,9 @@ use gallagher_rfid_core::mifare::application_directory::{
 use gallagher_rfid_core::mifare::classic::{FourBlockSector, KeyProvider, KeyType, Sector, Tag};
 use gallagher_rfid_core::mifare::desfire::crypto::aes_cbc_decrypt_in_place;
 use gallagher_rfid_core::mifare::desfire::{
-    AccessCondition, ApplicationId, ApplicationKeyType, Command, CommandCode, CommunicationMode,
-    Desfire, FileId, FileSettings, FileSettingsDetails, FileType, FrameCodec, KeyNumber,
-    KeySettings, RndA, Transport, WrappedFraming, U24,
+    AccessCondition, AccessRights, ApplicationId, ApplicationKeyType, Command, CommandCode,
+    CommunicationMode, Desfire, FileId, FileSettings, FileSettingsDetails, FileType, FrameCodec,
+    KeyNumber, KeySettings, RndA, Transport, WrappedFraming, U24,
 };
 use gallagher_rfid_pcsc::{
     acr122u::Acr122uReader,
@@ -123,8 +123,50 @@ fn main() {
             };
             read_desfire_tag(card, &desfire_args);
         }
+        "desfire-format" => {
+            let auth = match parse_optional_aes_auth(&args[2..]) {
+                Ok(a) => a,
+                Err(error) => {
+                    eprintln!("desfire-format: {error}");
+                    eprintln!(
+                        "Usage: {} desfire-format [--auth-aes <n>:<32_hex>]",
+                        args[0]
+                    );
+                    std::process::exit(1);
+                }
+            };
+            format_desfire(card, auth);
+        }
+        "desfire-provision" => {
+            let provision_args = match parse_provision_args(&args[2..]) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("desfire-provision: {error}");
+                    eprintln!(
+                        "Usage: {} desfire-provision --aid <hex> [--picc-auth-aes <n>:<32_hex>]",
+                        args[0]
+                    );
+                    std::process::exit(1);
+                }
+            };
+            provision_desfire(card, &provision_args);
+        }
+        "desfire-delete" => {
+            let delete_args = match parse_delete_args(&args[2..]) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("desfire-delete: {error}");
+                    eprintln!(
+                        "Usage: {} desfire-delete --aid <hex> [--auth-aes <n>:<32_hex>] [--file <id>]...",
+                        args[0]
+                    );
+                    std::process::exit(1);
+                }
+            };
+            delete_desfire(card, &delete_args);
+        }
         _ => {
-            eprintln!("Usage: {} [read|write|desfire]", args[0]);
+            eprintln!("Usage: {} [read|write|desfire|desfire-format|desfire-provision|desfire-delete]", args[0]);
             std::process::exit(1);
         }
     }
@@ -178,6 +220,78 @@ fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
         auth,
         debug_read,
         write,
+    })
+}
+
+struct ProvisionArgs {
+    aid: ApplicationId,
+    picc_auth: Option<AesAuthSpec>,
+}
+
+struct DeleteArgs {
+    aid: ApplicationId,
+    auth: Option<AesAuthSpec>,
+    files: Vec<FileId>,
+}
+
+fn parse_provision_args(args: &[String]) -> Result<ProvisionArgs, String> {
+    let mut aid: Option<ApplicationId> = None;
+    let mut picc_auth: Option<AesAuthSpec> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--aid" => {
+                let v = iter.next().ok_or("--aid requires a hex value")?;
+                aid = Some(parse_aid(v)?);
+            }
+            "--picc-auth-aes" => {
+                let v = iter
+                    .next()
+                    .ok_or("--picc-auth-aes requires <n>:<32_hex>")?;
+                picc_auth = Some(parse_aes_auth_spec(v)?);
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+    Ok(ProvisionArgs {
+        aid: aid.ok_or("--aid is required")?,
+        picc_auth,
+    })
+}
+
+fn parse_delete_args(args: &[String]) -> Result<DeleteArgs, String> {
+    let mut aid: Option<ApplicationId> = None;
+    let mut auth: Option<AesAuthSpec> = None;
+    let mut files: Vec<FileId> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--aid" => {
+                let v = iter.next().ok_or("--aid requires a hex value")?;
+                aid = Some(parse_aid(v)?);
+            }
+            "--auth-aes" => {
+                let v = iter
+                    .next()
+                    .ok_or("--auth-aes requires <n>:<32_hex>")?;
+                auth = Some(parse_aes_auth_spec(v)?);
+            }
+            "--file" => {
+                let v = iter.next().ok_or("--file requires an id (0-31)")?;
+                let raw: u8 = v
+                    .parse()
+                    .map_err(|e| format!("--file invalid id: {e}"))?;
+                files.push(
+                    FileId::new(raw).map_err(|e| format!("--file out of range: {e:?}"))?,
+                );
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+    Ok(DeleteArgs {
+        aid: aid.ok_or("--aid is required")?,
+        auth,
+        files,
     })
 }
 
@@ -243,6 +357,219 @@ fn random_bytes(len: usize) -> std::io::Result<Vec<u8>> {
     let mut bytes = vec![0u8; len];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes)
+}
+
+fn parse_optional_aes_auth(args: &[String]) -> Result<Option<AesAuthSpec>, String> {
+    let mut auth: Option<AesAuthSpec> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--auth-aes" => {
+                let v = iter.next().ok_or("--auth-aes requires <n>:<32_hex>")?;
+                auth = Some(parse_aes_auth_spec(v)?);
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+    Ok(auth)
+}
+
+fn format_desfire<T: Transport>(transport: T, auth: Option<AesAuthSpec>) {
+    let mut desfire = Desfire::new(transport, WrappedFraming);
+    let _ = desfire.select_application(ApplicationId::PICC);
+
+    if let Some(auth) = auth {
+        let rnd_a = match random_rnd_a() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  /dev/urandom: {e}");
+                return;
+            }
+        };
+        match desfire.authenticate_aes_with_rnd_a(auth.key_number, &auth.key, rnd_a) {
+            Ok(_) => println!("  PICC authenticated."),
+            Err(e) => {
+                eprintln!("  PICC auth failed: {e:?}");
+                return;
+            }
+        }
+    }
+
+    match desfire.format_picc() {
+        Ok(()) => println!("  PICC formatted. All applications deleted, memory reclaimed."),
+        Err(e) => eprintln!("  FormatPICC failed: {e:?}"),
+    }
+}
+
+fn provision_desfire<T: Transport>(transport: T, args: &ProvisionArgs) {
+    let mut desfire = Desfire::new(transport, WrappedFraming);
+    let _ = desfire.select_application(ApplicationId::PICC);
+
+    if let Some(auth) = args.picc_auth {
+        let rnd_a = match random_rnd_a() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  /dev/urandom: {e}");
+                return;
+            }
+        };
+        match desfire.authenticate_aes_with_rnd_a(auth.key_number, &auth.key, rnd_a) {
+            Ok(_) => println!("  PICC authenticated."),
+            Err(e) => {
+                eprintln!("  PICC auth failed: {e:?}");
+                return;
+            }
+        }
+    }
+
+    let key_settings = KeySettings::new(0x0F, ApplicationKeyType::Aes, 3);
+    match desfire.create_application(args.aid, key_settings) {
+        Ok(()) => println!("  Created application 0x{:06X}.", args.aid.as_u32()),
+        Err(e) => {
+            eprintln!("  CreateApplication failed: {e:?}");
+            return;
+        }
+    }
+
+    if let Err(e) = desfire.select_application(args.aid) {
+        eprintln!("  SelectApplication failed: {e:?}");
+        return;
+    }
+    let rnd_a = match random_rnd_a() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  /dev/urandom: {e}");
+            return;
+        }
+    };
+    match desfire.authenticate_aes_with_rnd_a(KeyNumber::new(0).unwrap(), &[0u8; 16], rnd_a) {
+        Ok(_) => println!("  App authenticated (default key)."),
+        Err(e) => {
+            eprintln!("  App auth failed: {e:?}");
+            return;
+        }
+    }
+
+    let key0 = AccessCondition::Key(KeyNumber::new(0).unwrap());
+    let access = AccessRights::new(AccessCondition::Free, key0, key0, key0);
+    let size32 = U24::new(32).unwrap();
+    let size16 = U24::new(16).unwrap();
+    let rec_size = U24::new(16).unwrap();
+    let max_rec = U24::new(8).unwrap();
+
+    for (id, mode, label) in [
+        (0u8, CommunicationMode::Plain, "standard data, plain, 32 B"),
+        (1u8, CommunicationMode::Maced, "standard data, MACed, 32 B"),
+        (2u8, CommunicationMode::Enciphered, "standard data, enciphered, 32 B"),
+    ] {
+        let fid = FileId::new(id).unwrap();
+        match desfire.create_std_data_file(fid, mode, access, size32) {
+            Ok(()) => println!("  File {id}: {label}."),
+            Err(e) => eprintln!("  File {id} CreateStdDataFile failed: {e:?}"),
+        }
+    }
+
+    match desfire.create_backup_data_file(
+        FileId::new(3).unwrap(),
+        CommunicationMode::Plain,
+        access,
+        size16,
+    ) {
+        Ok(()) => println!("  File 3: backup data, plain, 16 B."),
+        Err(e) => eprintln!("  File 3 CreateBackupDataFile failed: {e:?}"),
+    }
+
+    match desfire.create_value_file(
+        FileId::new(4).unwrap(),
+        CommunicationMode::Plain,
+        access,
+        0,
+        1000,
+        0,
+        false,
+    ) {
+        Ok(()) => println!("  File 4: value, plain, limits 0..1000, initial 0."),
+        Err(e) => eprintln!("  File 4 CreateValueFile failed: {e:?}"),
+    }
+
+    match desfire.create_linear_record_file(
+        FileId::new(5).unwrap(),
+        CommunicationMode::Plain,
+        access,
+        rec_size,
+        max_rec,
+    ) {
+        Ok(()) => println!("  File 5: linear record, plain, 16 B/record, 8 max."),
+        Err(e) => eprintln!("  File 5 CreateLinearRecordFile failed: {e:?}"),
+    }
+
+    match desfire.create_cyclic_record_file(
+        FileId::new(6).unwrap(),
+        CommunicationMode::Plain,
+        access,
+        rec_size,
+        max_rec,
+    ) {
+        Ok(()) => println!("  File 6: cyclic record, plain, 16 B/record, 8 max."),
+        Err(e) => eprintln!("  File 6 CreateCyclicRecordFile failed: {e:?}"),
+    }
+}
+
+fn delete_desfire<T: Transport>(transport: T, args: &DeleteArgs) {
+    let mut desfire = Desfire::new(transport, WrappedFraming);
+    let _ = desfire.select_application(ApplicationId::PICC);
+
+    if args.files.is_empty() {
+        // No files specified: delete the whole application (PICC-level auth).
+        if let Some(auth) = args.auth {
+            let rnd_a = match random_rnd_a() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("  /dev/urandom: {e}");
+                    return;
+                }
+            };
+            match desfire.authenticate_aes_with_rnd_a(auth.key_number, &auth.key, rnd_a) {
+                Ok(_) => println!("  PICC authenticated."),
+                Err(e) => {
+                    eprintln!("  PICC auth failed: {e:?}");
+                    return;
+                }
+            }
+        }
+        match desfire.delete_application(args.aid) {
+            Ok(()) => println!("  Deleted application 0x{:06X}.", args.aid.as_u32()),
+            Err(e) => eprintln!("  DeleteApplication failed: {e:?}"),
+        }
+    } else {
+        // Files specified: select app, auth at app level, delete each file.
+        if let Err(e) = desfire.select_application(args.aid) {
+            eprintln!("  SelectApplication failed: {e:?}");
+            return;
+        }
+        if let Some(auth) = args.auth {
+            let rnd_a = match random_rnd_a() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("  /dev/urandom: {e}");
+                    return;
+                }
+            };
+            match desfire.authenticate_aes_with_rnd_a(auth.key_number, &auth.key, rnd_a) {
+                Ok(_) => println!("  App authenticated."),
+                Err(e) => {
+                    eprintln!("  App auth failed: {e:?}");
+                    return;
+                }
+            }
+        }
+        for file_id in &args.files {
+            match desfire.delete_file(*file_id) {
+                Ok(()) => println!("  Deleted file {}.", file_id.as_byte()),
+                Err(e) => eprintln!("  DeleteFile({}) failed: {e:?}", file_id.as_byte()),
+            }
+        }
+    }
 }
 
 fn read_gallagher_tag<T: Tag>(tag: &mut T) {

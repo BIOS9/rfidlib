@@ -266,6 +266,7 @@ mod tests {
         crypto::{AesCmac, AesSessionKey},
         key::KeyNumber,
         session::AuthenticatedSession,
+        status::Status,
     };
 
     #[test]
@@ -363,5 +364,147 @@ mod tests {
         let tdea3 = AuthenticatedSession::new_3tdea(kn, ThreeKey3DesSessionKey::new([0; 24]));
         assert_eq!(tdea3.block_size(), 8);
         assert_eq!(tdea3.crc_size(), 4);
+    }
+
+    // Proxmark trace: `hf mfdes formatpicc -n 0 -t aes`
+    // Session key: 01 02 03 04 80 08 F7 4F 13 14 15 16 3E 9A 3B 1C
+    // Command: 90 FC 00 00 00  (no payload)
+    // Response: 1A 27 DE C4 EF 81 40 D4 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn format_picc_cmac_matches_proxmark_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x80, 0x08, 0xF7, 0x4F, 0x13, 0x14, 0x15, 0x16, 0x3E, 0x9A,
+            0x3B, 0x1C,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(CommandCode::FORMAT_PICC, &[])
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x1A, 0x27, 0xDE, 0xC4, 0xEF, 0x81, 0x40, 0xD4]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes deletefile --aid 111111 --fid 01 --keyno 0 --algo aes`
+    // Session key: 01 02 03 04 90 1E 6D BC 13 14 15 16 69 C2 AA FA
+    // Command: 90 DF 00 00 01 01 00  (fid=0x01)
+    // Response: 36 2D 0D 63 08 43 E6 F9 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn delete_file_cmac_matches_proxmark_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x90, 0x1E, 0x6D, 0xBC, 0x13, 0x14, 0x15, 0x16, 0x69, 0xC2,
+            0xAA, 0xFA,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(CommandCode::DELETE_FILE, &[0x01])
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x36, 0x2D, 0x0D, 0x63, 0x08, 0x43, 0xE6, 0xF9]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes deleteapp --aid 222222 --algo aes --keyno 0`
+    // PICC master key: 00..00 (default AES)
+    // Session key reported by proxmark: 01 02 03 04 A3 63 2A 85 13 14 15 16 CA B9 DB E9
+    // Command: 90 DA 00 00 03 22 22 22 00
+    // Response: 01 C5 F1 0B 07 D4 C7 25 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn delete_application_cmac_matches_picc_auth_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xA3, 0x63, 0x2A, 0x85, 0x13, 0x14, 0x15, 0x16, 0xCA, 0xB9,
+            0xDB, 0xE9,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(CommandCode::DELETE_APPLICATION, &[0x22, 0x22, 0x22])
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x01, 0xC5, 0xF1, 0x0B, 0x07, 0xD4, 0xC7, 0x25]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes createfile --aid 222222 --fid 01 --amode encrypt --rrights key0
+    //   --wrights key0 --rwrights key0 --chrights key0 --size 000010 -n 0 -t aes`
+    // Session key: 01 02 03 04 24 36 0B AA 13 14 15 16 19 61 D1 BC
+    // Command: 90 CD 00 00 07 01 03 00 00 10 00 00 00
+    //   fid=0x01, comm_mode=0x03(enc), access=0x0000(all key0), size=0x000010
+    // Response: CB C4 40 7F 5E 89 71 94 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn create_std_data_file_cmac_matches_proxmark_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x24, 0x36, 0x0B, 0xAA, 0x13, 0x14, 0x15, 0x16, 0x19, 0x61,
+            0xD1, 0xBC,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_STD_DATA_FILE,
+                &[0x01, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00],
+            )
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0xCB, 0xC4, 0x40, 0x7F, 0x5E, 0x89, 0x71, 0x94]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes createapp --aid 111111 -n 0 -t aes --dstalgo aes --numkeys 1`
+    // PICC master key: 00..00 (default AES)
+    // Session key reported by proxmark: 01 02 03 04 59 05 6A FD 13 14 15 16 0B A4 CE BF
+    // Command: 90 CA 00 00 05 11 11 11 0F 81 00
+    // Response: A5 4D BC AE 76 9D 92 D4 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn create_application_cmac_matches_picc_auth_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x59, 0x05, 0x6A, 0xFD, 0x13, 0x14, 0x15, 0x16, 0x0B, 0xA4,
+            0xCE, 0xBF,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        // CMAC state updated for command (MAC not appended to command per DESFire EV1 spec).
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_APPLICATION,
+                &[0x11, 0x11, 0x11, 0x0F, 0x81],
+            )
+            .unwrap();
+
+        // Response MAC over empty body + status 0x00.
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0xA5, 0x4D, 0xBC, 0xAE, 0x76, 0x9D, 0x92, 0xD4]
+        );
     }
 }
