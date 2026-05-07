@@ -273,6 +273,70 @@ where
         FileSettings::parse(data.as_slice())
     }
 
+    /// Changes the communication mode and access rights of a file.
+    ///
+    /// Requires authentication. New settings are sent encrypted with CRC32 using the current
+    /// session chaining IV (same pattern as enciphered writes — no command CMAC update).
+    pub fn change_file_settings(
+        &mut self,
+        file_id: FileId,
+        communication_mode: CommunicationMode,
+        access_rights: AccessRights,
+    ) -> Result<(), Error> {
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        let ar = access_rights.to_bytes();
+        let new_settings = [u8::from(communication_mode), ar[0], ar[1]];
+
+        // CRC32 covers [cmd_code || fid || new_settings].
+        let mut crc_input: Vec<u8, 5> = Vec::new();
+        crc_input
+            .push(CommandCode::CHANGE_FILE_SETTINGS.as_byte())
+            .map_err(|_| Error::CommandTooLong)?;
+        crc_input
+            .push(file_id.as_byte())
+            .map_err(|_| Error::CommandTooLong)?;
+        crc_input
+            .extend_from_slice(&new_settings)
+            .map_err(|_| Error::CommandTooLong)?;
+        let crc = desfire_crc32(crc_input.as_slice());
+
+        let block_size = session.block_size();
+        let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        plaintext
+            .extend_from_slice(&new_settings)
+            .map_err(|_| Error::CommandTooLong)?;
+        plaintext
+            .extend_from_slice(&crc)
+            .map_err(|_| Error::CommandTooLong)?;
+        while plaintext.len() % block_size != 0 {
+            plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
+        }
+
+        // Encrypts in place using current chaining IV; chaining advances to last ciphertext block.
+        session.cbc_encrypt_in_place(plaintext.as_mut_slice())?;
+
+        let mut cmd_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        cmd_data
+            .push(file_id.as_byte())
+            .map_err(|_| Error::CommandTooLong)?;
+        cmd_data
+            .extend_from_slice(plaintext.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        let command = Command::new(CommandCode::CHANGE_FILE_SETTINGS, cmd_data.as_slice())?;
+
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+
+        verify_response_mac(&mut session, Status::OperationOk, response.data())?;
+        self.session = Session::Authenticated(session);
+        Ok(())
+    }
+
     /// Reads and MAC-verifies bytes from a `MACed` standard or backup data file.
     pub fn read_data_maced<const N: usize>(
         &mut self,

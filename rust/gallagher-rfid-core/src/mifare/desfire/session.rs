@@ -263,7 +263,7 @@ pub enum SessionKey {
 mod tests {
     use crate::mifare::desfire::{
         command::CommandCode,
-        crypto::{AesCmac, AesSessionKey},
+        crypto::{AesCmac, AesSessionKey, desfire_crc32},
         key::KeyNumber,
         session::AuthenticatedSession,
         status::Status,
@@ -473,6 +473,69 @@ mod tests {
         assert_eq!(
             response_mac.as_bytes(),
             [0xCB, 0xC4, 0x40, 0x7F, 0x5E, 0x89, 0x71, 0x94]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes chfilesettings --aid 111111 --fid 00 --amode encrypt
+    //   --rrights free --wrights free --rwrights free --chrights key0 --algo aes --keyno 0`
+    // Session key: 01 02 03 04 D4 E8 23 47 13 14 15 16 B1 EF FA FC
+    // Step 1: GetFileSettings fid=0x00
+    //   Command:  90 F5 00 00 01 00 00
+    //   Response: 00 00 00 E0 20 00 00 D9 A3 18 EF 7D 09 F9 24 91 00
+    // Step 2: ChangeFileSettings fid=0x00, new settings 03 E0 EE (encrypt, all free except change=key0)
+    //   Command:  90 5F 00 00 11 00 8E 8C 90 DA 0C 1B 1A 9B 74 90 94 EC E7 96 2B 39 00
+    //   Response: 93 91 BB 51 2D 1D 62 C1 91 00
+    #[test]
+    fn change_file_settings_crypto_chain() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xD4, 0xE8, 0x23, 0x47, 0x13, 0x14, 0x15, 0x16, 0xB1, 0xEF,
+            0xFA, 0xFC,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        // Step 1: GetFileSettings fid=0x00
+        session
+            .update_command_cmac(CommandCode::GET_FILE_SETTINGS, &[0x00])
+            .unwrap();
+        let mac1 = session
+            .update_response_cmac(
+                Status::OperationOk,
+                &[0x00, 0x00, 0x00, 0xE0, 0x20, 0x00, 0x00],
+            )
+            .unwrap();
+        assert_eq!(
+            mac1.as_bytes(),
+            [0xD9, 0xA3, 0x18, 0xEF, 0x7D, 0x09, 0xF9, 0x24]
+        );
+
+        // Step 2: ChangeFileSettings — encrypt new settings with CRC32, no command CMAC update.
+        let crc = desfire_crc32(&[
+            CommandCode::CHANGE_FILE_SETTINGS.as_byte(),
+            0x00, // fid
+            0x03, 0xE0, 0xEE, // comm=encrypt, access=(rw=free,change=key0,read=free,write=free)
+        ]);
+        let mut plaintext = [0u8; 16];
+        plaintext[0] = 0x03;
+        plaintext[1] = 0xE0;
+        plaintext[2] = 0xEE;
+        plaintext[3..7].copy_from_slice(&crc);
+        // bytes 7..16 zero-padded
+
+        session.cbc_encrypt_in_place(&mut plaintext).unwrap();
+        assert_eq!(
+            plaintext,
+            [
+                0x8E, 0x8C, 0x90, 0xDA, 0x0C, 0x1B, 0x1A, 0x9B, 0x74, 0x90, 0x94, 0xEC, 0xE7,
+                0x96, 0x2B, 0x39
+            ]
+        );
+
+        let mac2 = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+        assert_eq!(
+            mac2.as_bytes(),
+            [0x93, 0x91, 0xBB, 0x51, 0x2D, 0x1D, 0x62, 0xC1]
         );
     }
 
