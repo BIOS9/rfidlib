@@ -193,6 +193,25 @@ where
         parse_application_ids(data.as_slice(), application_ids)
     }
 
+    /// Commits all pending changes in the current transaction.
+    ///
+    /// Required after writing to backup data files or record files to make
+    /// changes permanent. Without commit the card discards the writes on
+    /// the next `SelectApplication` or power cycle.
+    pub fn commit_transaction(&mut self) -> Result<(), Error> {
+        let command = Command::new(CommandCode::COMMIT_TRANSACTION, &[])?;
+        self.execute_management_command(&command)
+    }
+
+    /// Aborts all pending changes in the current transaction.
+    ///
+    /// Discards any writes to backup data files or record files since the
+    /// last commit.
+    pub fn abort_transaction(&mut self) -> Result<(), Error> {
+        let command = Command::new(CommandCode::ABORT_TRANSACTION, &[])?;
+        self.execute_management_command(&command)
+    }
+
     /// Formats the PICC, wiping all applications and reclaiming all memory.
     ///
     /// Requires prior authentication with the PICC master key.
@@ -358,9 +377,7 @@ where
             .extend_from_slice(data)
             .map_err(|_| Error::CommandTooLong)?;
         let command = Command::new(CommandCode::WRITE_DATA, cmd_data.as_slice())?;
-        // Response may contain a MAC if authenticated; ignored for plain writes.
-        let mut ignored: Vec<u8, 8> = Vec::new();
-        self.executor.execute(&command, &mut ignored)
+        self.execute_management_command(&command)
     }
 
     /// Writes and `MAC`-signs bytes to a `MACed` standard or backup data file.
