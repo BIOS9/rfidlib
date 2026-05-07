@@ -51,6 +51,25 @@ pub struct KeySettings {
 }
 
 impl KeySettings {
+    /// Creates key settings for use in `CreateApplication`.
+    ///
+    /// `raw_settings` is the lower four bits controlling master-key behaviour (0x0F = all defaults).
+    pub fn new(raw_settings: u8, key_type: ApplicationKeyType, key_count: u8) -> Self {
+        let type_bits: u8 = match key_type {
+            ApplicationKeyType::TwoKey3Des => 0b00,
+            ApplicationKeyType::ThreeKey3Des => 0b01,
+            ApplicationKeyType::Aes => 0b10,
+            ApplicationKeyType::Rfu => 0b11,
+        };
+        let raw_key_count = (type_bits << 6) | (key_count & 0x0F);
+        Self {
+            raw_settings,
+            raw_key_count,
+            key_count: key_count & 0x0F,
+            key_type,
+        }
+    }
+
     /// Parses a `GetKeySettings` response.
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
         if data.len() != 2 {
@@ -157,6 +176,17 @@ mod tests {
 
         assert_eq!(settings.key_count(), 2);
         assert_eq!(settings.key_type(), ApplicationKeyType::Aes);
+    }
+
+    #[test]
+    fn new_encodes_aes_key_count_correctly() {
+        // Proxmark trace: --dstalgo aes --numkeys 1  ->  Key Set 2 = 0x81
+        // 0x81 = 0b10_000001 = AES (bits 7:6) + 1 key (bits 3:0)
+        let ks = KeySettings::new(0x0F, ApplicationKeyType::Aes, 1);
+        assert_eq!(ks.raw_settings(), 0x0F);
+        assert_eq!(ks.raw_key_count(), 0x81);
+        assert_eq!(ks.key_count(), 1);
+        assert_eq!(ks.key_type(), ApplicationKeyType::Aes);
     }
 
     #[test]
