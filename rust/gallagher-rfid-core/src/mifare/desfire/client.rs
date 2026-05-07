@@ -12,7 +12,7 @@ use crate::mifare::desfire::{
     file::{FileId, FileSettings},
     framing::FrameCodec,
     key::{KeyNumber, KeySettings},
-    session::{AuthenticatedSession, Session, SessionKey},
+    session::{AuthenticatedSession, Session},
     status::Status,
     transport::{Transport, MAX_FRAME_SIZE},
     types::U24,
@@ -278,36 +278,36 @@ where
         };
 
         session.update_command_cmac(command.code(), command.data())?;
-        let iv = session.cmac_chaining().state();
+
         let response = self.executor.exchange_one(&command)?;
         if response.status() != Status::OperationOk {
             return Err(Error::Status(response.status()));
         }
-        if response.data().len() < 16 || !response.data().len().is_multiple_of(16) {
+        let block_size = session.block_size();
+        if response.data().len() < block_size || response.data().len() % block_size != 0 {
             return Err(Error::InvalidResponseLength);
         }
 
-        let SessionKey::Aes(session_key) = session.session_key();
         let mut decrypted: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         decrypted
             .extend_from_slice(response.data())
             .map_err(|_| Error::ResponseTooLong)?;
-        let last_ciphertext_block: [u8; 16] = response.data()[response.data().len() - 16..]
-            .try_into()
-            .expect("slice length is checked");
 
-        aes_cbc_decrypt_in_place(&session_key.as_bytes(), &iv, decrypted.as_mut_slice());
+        // Decrypts in place using current chaining IV and updates chaining state to last ciphertext block.
+        session.cbc_decrypt_in_place(decrypted.as_mut_slice())?;
+
+        let crc_size = session.crc_size();
         let plaintext_len = encrypted_read_plaintext_len(
             decrypted.as_slice(),
             usize::try_from(length.as_u32()).expect("U24 fits in usize"),
             response.status(),
+            crc_size,
         )?;
 
         data.clear();
         data.extend_from_slice(&decrypted.as_slice()[..plaintext_len])
             .map_err(|_| Error::ResponseTooLong)?;
 
-        session.set_chaining_state(last_ciphertext_block);
         self.session = Session::Authenticated(session);
         Ok(())
     }
@@ -378,13 +378,10 @@ where
         };
 
         let header = write_data_command_header(file_id, offset, data)?;
-        let SessionKey::Aes(session_key) = session.session_key();
 
         // IV = current chaining state (no command CMAC update for enciphered writes).
-        let iv = session.cmac_chaining().state();
-
         // CRC covers the full command payload: [cmd_code || header || data].
-        // Plaintext: [data || CRC32(cmd_code||header||data)] zero-padded to 16-byte boundary
+        // Plaintext: [data || CRC(cmd_code||header||data)] zero-padded to block boundary
         // (ISO 9797-1 method 1 — no 0x80 terminator).
         let mut crc_input: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         crc_input
@@ -398,6 +395,7 @@ where
             .map_err(|_| Error::CommandTooLong)?;
         let crc = desfire_crc32(crc_input.as_slice());
 
+        let block_size = session.block_size();
         let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         plaintext
             .extend_from_slice(data)
@@ -405,14 +403,12 @@ where
         plaintext
             .extend_from_slice(&crc)
             .map_err(|_| Error::CommandTooLong)?;
-        while plaintext.len() % 16 != 0 {
+        while plaintext.len() % block_size != 0 {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
 
-        aes_cbc_encrypt_in_place(&session_key.as_bytes(), &iv, plaintext.as_mut_slice());
-        let last_ciphertext_block: [u8; 16] = plaintext.as_slice()[plaintext.len() - 16..]
-            .try_into()
-            .expect("slice length is checked");
+        // Encrypts in place using current chaining IV and updates chaining state to last ciphertext block.
+        session.cbc_encrypt_in_place(plaintext.as_mut_slice())?;
 
         // Build command: [header || ciphertext].
         let mut cmd_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
@@ -423,9 +419,6 @@ where
             .extend_from_slice(plaintext.as_slice())
             .map_err(|_| Error::CommandTooLong)?;
         let command = Command::new(CommandCode::WRITE_DATA, cmd_data.as_slice())?;
-
-        // Last ciphertext block becomes the new chaining state for response MAC verification.
-        session.set_chaining_state(last_ciphertext_block);
 
         let response = self.executor.exchange_one(&command)?;
         if response.status() != Status::OperationOk {
@@ -507,17 +500,23 @@ fn encrypted_read_plaintext_len(
     decrypted: &[u8],
     requested_length: usize,
     status: Status,
+    crc_size: usize,
 ) -> Result<usize, Error> {
     if requested_length == 0 {
-        return infer_encrypted_read_plaintext_len(decrypted, status);
+        return infer_encrypted_read_plaintext_len(decrypted, status, crc_size);
     }
 
-    validate_encrypted_read_plaintext_len(decrypted, requested_length, status)
+    validate_encrypted_read_plaintext_len(decrypted, requested_length, status, crc_size)
 }
 
-fn infer_encrypted_read_plaintext_len(decrypted: &[u8], status: Status) -> Result<usize, Error> {
-    for plaintext_len in (0..=decrypted.len().saturating_sub(4)).rev() {
-        if validate_encrypted_read_plaintext_len(decrypted, plaintext_len, status).is_ok() {
+fn infer_encrypted_read_plaintext_len(
+    decrypted: &[u8],
+    status: Status,
+    crc_size: usize,
+) -> Result<usize, Error> {
+    for plaintext_len in (0..=decrypted.len().saturating_sub(crc_size)).rev() {
+        if validate_encrypted_read_plaintext_len(decrypted, plaintext_len, status, crc_size).is_ok()
+        {
             return Ok(plaintext_len);
         }
     }
@@ -529,9 +528,10 @@ fn validate_encrypted_read_plaintext_len(
     decrypted: &[u8],
     plaintext_len: usize,
     status: Status,
+    crc_size: usize,
 ) -> Result<usize, Error> {
     let crc_start = plaintext_len;
-    let crc_end = crc_start + 4;
+    let crc_end = crc_start + crc_size;
     if crc_end > decrypted.len() {
         return Err(Error::InvalidResponseLength);
     }
@@ -548,6 +548,7 @@ fn validate_encrypted_read_plaintext_len(
         .push(status.as_byte())
         .map_err(|_| Error::ResponseTooLong)?;
 
+    // CRC32 for AES and 3TDEA; CRC16 for DES/2TDEA (not yet implemented).
     if desfire_crc32(crc_data.as_slice()) != decrypted[crc_start..crc_end] {
         return Err(Error::InvalidCrc);
     }

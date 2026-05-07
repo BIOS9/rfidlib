@@ -196,6 +196,48 @@ impl Default for AesCmacChaining {
     }
 }
 
+/// DES session key (8 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DesSessionKey([u8; 8]);
+
+impl DesSessionKey {
+    pub const fn new(bytes: [u8; 8]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 8] {
+        self.0
+    }
+}
+
+/// Two-key triple-DES session key (16 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TwoKey3DesSessionKey([u8; 16]);
+
+impl TwoKey3DesSessionKey {
+    pub const fn new(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 16] {
+        self.0
+    }
+}
+
+/// Three-key triple-DES session key (24 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreeKey3DesSessionKey([u8; 24]);
+
+impl ThreeKey3DesSessionKey {
+    pub const fn new(bytes: [u8; 24]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 24] {
+        self.0
+    }
+}
+
 /// Calculates the CRC32 variant used inside encrypted `DESFire` EV1 responses.
 pub fn desfire_crc32(data: &[u8]) -> [u8; 4] {
     let mut crc = 0xFFFF_FFFF;

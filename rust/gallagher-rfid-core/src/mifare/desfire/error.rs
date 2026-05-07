@@ -39,4 +39,6 @@ pub enum Error {
     InvalidFileType(u8),
     /// The transport layer failed to exchange a frame with the tag.
     Transport,
+    /// The operation requires a cryptographic algorithm that is not yet implemented.
+    UnsupportedAlgorithm,
 }

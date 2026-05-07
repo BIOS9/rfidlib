@@ -16,7 +16,7 @@ use gallagher_rfid_core::mifare::desfire::crypto::aes_cbc_decrypt_in_place;
 use gallagher_rfid_core::mifare::desfire::{
     AccessCondition, ApplicationId, ApplicationKeyType, Command, CommandCode, CommunicationMode,
     Desfire, FileId, FileSettings, FileSettingsDetails, FileType, FrameCodec, KeyNumber,
-    KeySettings, RndA, SessionKey, Transport, WrappedFraming, U24,
+    KeySettings, RndA, Transport, WrappedFraming, U24,
 };
 use gallagher_rfid_pcsc::{
     acr122u::Acr122uReader,
@@ -678,8 +678,11 @@ fn debug_encrypted_read<T: Transport, C: FrameCodec>(
         eprintln!("      not authenticated");
         return;
     };
-    let SessionKey::Aes(session_key) = session.session_key();
-    let pre_iv = session.cmac_chaining().state();
+    let Some((session_key, pre_chaining)) = session.aes_state() else {
+        eprintln!("      debug only supported for AES sessions");
+        return;
+    };
+    let pre_iv = pre_chaining.state();
 
     let mut cmd_data: HeaplessVec<u8, 7> = HeaplessVec::new();
     if cmd_data.push(file_id.as_byte()).is_err()
@@ -704,7 +707,7 @@ fn debug_encrypted_read<T: Transport, C: FrameCodec>(
         eprintln!("      update_command_cmac failed: {error:?}");
         return;
     }
-    let post_iv = session.cmac_chaining().state();
+    let post_iv = session.aes_state().expect("still AES session").1.state();
 
     println!("      cmd_code:    0x{:02X}", command.code().as_byte());
     println!("      cmd_data:    {:02X?}", command.data());
