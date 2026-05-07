@@ -312,6 +312,131 @@ where
         Ok(())
     }
 
+    /// Writes bytes to a plain standard or backup data file.
+    pub fn write_data(&mut self, file_id: FileId, offset: U24, data: &[u8]) -> Result<(), Error> {
+        let header = write_data_command_header(file_id, offset, data)?;
+        let mut cmd_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        cmd_data
+            .extend_from_slice(header.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        cmd_data
+            .extend_from_slice(data)
+            .map_err(|_| Error::CommandTooLong)?;
+        let command = Command::new(CommandCode::WRITE_DATA, cmd_data.as_slice())?;
+        // Response may contain a MAC if authenticated; ignored for plain writes.
+        let mut ignored: Vec<u8, 8> = Vec::new();
+        self.executor.execute(&command, &mut ignored)
+    }
+
+    /// Writes and `MAC`-signs bytes to a `MACed` standard or backup data file.
+    pub fn write_data_maced(
+        &mut self,
+        file_id: FileId,
+        offset: U24,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        let header = write_data_command_header(file_id, offset, data)?;
+
+        // CMAC covers [cmd_code || header || data].
+        let mut cmac_payload: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        cmac_payload
+            .extend_from_slice(header.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        cmac_payload
+            .extend_from_slice(data)
+            .map_err(|_| Error::CommandTooLong)?;
+        let mac = session.update_command_cmac(CommandCode::WRITE_DATA, cmac_payload.as_slice())?;
+
+        // Build command: [header || data || MAC].
+        cmac_payload
+            .extend_from_slice(&mac.as_bytes())
+            .map_err(|_| Error::CommandTooLong)?;
+        let command = Command::new(CommandCode::WRITE_DATA, cmac_payload.as_slice())?;
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+
+        verify_response_mac(&mut session, Status::OperationOk, response.data())?;
+        self.session = Session::Authenticated(session);
+        Ok(())
+    }
+
+    /// Writes and encrypts bytes to an enciphered standard or backup data file.
+    pub fn write_data_enciphered(
+        &mut self,
+        file_id: FileId,
+        offset: U24,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        let header = write_data_command_header(file_id, offset, data)?;
+        let SessionKey::Aes(session_key) = session.session_key();
+
+        // IV = current chaining state (no command CMAC update for enciphered writes).
+        let iv = session.cmac_chaining().state();
+
+        // CRC covers the full command payload: [cmd_code || header || data].
+        // Plaintext: [data || CRC32(cmd_code||header||data)] zero-padded to 16-byte boundary
+        // (ISO 9797-1 method 1 — no 0x80 terminator).
+        let mut crc_input: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        crc_input
+            .push(CommandCode::WRITE_DATA.as_byte())
+            .map_err(|_| Error::CommandTooLong)?;
+        crc_input
+            .extend_from_slice(header.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        crc_input
+            .extend_from_slice(data)
+            .map_err(|_| Error::CommandTooLong)?;
+        let crc = desfire_crc32(crc_input.as_slice());
+
+        let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        plaintext
+            .extend_from_slice(data)
+            .map_err(|_| Error::CommandTooLong)?;
+        plaintext
+            .extend_from_slice(&crc)
+            .map_err(|_| Error::CommandTooLong)?;
+        while plaintext.len() % 16 != 0 {
+            plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
+        }
+
+        aes_cbc_encrypt_in_place(&session_key.as_bytes(), &iv, plaintext.as_mut_slice());
+        let last_ciphertext_block: [u8; 16] = plaintext.as_slice()[plaintext.len() - 16..]
+            .try_into()
+            .expect("slice length is checked");
+
+        // Build command: [header || ciphertext].
+        let mut cmd_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        cmd_data
+            .extend_from_slice(header.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        cmd_data
+            .extend_from_slice(plaintext.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        let command = Command::new(CommandCode::WRITE_DATA, cmd_data.as_slice())?;
+
+        // Last ciphertext block becomes the new chaining state for response MAC verification.
+        session.set_chaining_state(last_ciphertext_block);
+
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+
+        verify_response_mac(&mut session, Status::OperationOk, response.data())?;
+        self.session = Session::Authenticated(session);
+        Ok(())
+    }
+
     fn execute_single_maced<const N: usize>(
         &mut self,
         command: &Command,
@@ -335,6 +460,15 @@ where
         self.session = Session::Authenticated(session);
         Ok(())
     }
+}
+
+fn write_data_command_header(
+    file_id: FileId,
+    offset: U24,
+    data: &[u8],
+) -> Result<Vec<u8, 7>, Error> {
+    let length = U24::new(data.len() as u32).ok_or(Error::CommandTooLong)?;
+    read_data_command_data(file_id, offset, length)
 }
 
 fn read_data_command_data(file_id: FileId, offset: U24, length: U24) -> Result<Vec<u8, 7>, Error> {
@@ -1350,6 +1484,254 @@ mod tests {
                 0x0E, 0x0F
             ]
         );
+    }
+
+    #[test]
+    fn writes_enciphered_data_from_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes write --aid 223344 --fid 01
+        //   -d 112233445566778899AABBCCDDEEFF --keyno 0 --algo aes
+        // Encrypted payload: data(15) || CRC32(data)(4) || 0x80 || zeros(12) = 32 bytes.
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x44, 0x33, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xAA, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0x41, 0x65, 0x2F, 0xC4, 0xE4, 0xB0, 0xDF, 0x1E, 0xF8, 0x1B, 0x62, 0xE9, 0xC9,
+                    0x8C, 0xA5, 0xEC, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0x1F, 0x90, 0xF8, 0x2E, 0xE3, 0x0F, 0xA2, 0x9C,
+                    0x8C, 0x0D, 0x3D, 0xC1, 0xBD, 0x07, 0x18, 0x1B, 0x3F, 0xF3, 0x08, 0x29, 0x76,
+                    0x49, 0xDF, 0x58, 0x62, 0x58, 0x70, 0x6A, 0x58, 0x3C, 0x5A, 0xBB, 0x00,
+                ][..],
+                &[
+                    0x9A, 0xE7, 0x3B, 0xE1, 0x0D, 0xE7, 0xA3, 0xA1, 0xAA, 0x75, 0x13, 0xF1, 0xB6,
+                    0x44, 0xA9, 0x84, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00, 0xEC, 0xBB, 0x9D, 0x25, 0x12, 0x54,
+                    0xEE, 0x65, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0x3D, 0x00, 0x00, 0x27, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0xCA,
+                    0x5E, 0x29, 0x0C, 0x21, 0x2A, 0x67, 0x10, 0xE9, 0xD8, 0xD3, 0x41, 0xA7, 0x2B,
+                    0x1B, 0xE2, 0x0A, 0x4A, 0xD7, 0xD8, 0x8F, 0xDE, 0xE4, 0x04, 0x42, 0x5E, 0x2D,
+                    0xB2, 0x71, 0x0F, 0x6B, 0xF9, 0x00,
+                ][..],
+                &[0x91, 0x77, 0x50, 0xBD, 0xF0, 0x1D, 0x17, 0xB3, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_33_44).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_aes_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Aes(AesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xF7, 0x0F, 0xA1, 0xE2, 0x13, 0x14, 0x15, 0x16, 0xEA, 0xC9,
+                0x18, 0x7D,
+            ]))
+        );
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x01).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Enciphered);
+
+        desfire
+            .write_data_enciphered(
+                FileId::new(0x01).unwrap(),
+                U24::new(0).unwrap(),
+                &[
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+                    0xEE, 0xFF,
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn writes_maced_data_from_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes write --aid 223344 --fid 02
+        //   -d 0102030405060708090A0B0C0D0E0F --keyno 0 --algo aes
+        // Command MAC appended after plaintext data.
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x44, 0x33, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xAA, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0xAF, 0x5A, 0x9C, 0x1E, 0x11, 0xB9, 0x9F, 0x03, 0xC7, 0xC0, 0x2A, 0x8D, 0xEF,
+                    0x3E, 0x81, 0xCD, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0x81, 0xF3, 0xBE, 0xD3, 0xFD, 0x7A, 0x3D, 0x7F,
+                    0xE5, 0x45, 0x55, 0xB6, 0xF0, 0x5E, 0x64, 0x6E, 0x4C, 0xF6, 0xD4, 0x83, 0x21,
+                    0x02, 0x7D, 0xA7, 0x96, 0x74, 0x8F, 0x3C, 0x7D, 0xF0, 0xE8, 0x8C, 0x00,
+                ][..],
+                &[
+                    0x84, 0xF7, 0x00, 0xC2, 0xBE, 0x5A, 0x1D, 0xAB, 0x62, 0x53, 0xE4, 0x31, 0x16,
+                    0x79, 0xBE, 0x0E, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x02, 0x00][..],
+                &[
+                    0x00, 0x01, 0x00, 0x00, 0x10, 0x00, 0x00, 0xF4, 0xAD, 0xA4, 0xC3, 0xDB, 0x7D,
+                    0x0E, 0xE9, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0x3D, 0x00, 0x00, 0x1E, 0x02, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0x01,
+                    0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+                    0x0F, 0xF1, 0xC3, 0x91, 0x50, 0x6C, 0xDB, 0x6A, 0x2D, 0x00,
+                ][..],
+                &[0xEB, 0xDD, 0xE8, 0x5C, 0x53, 0x7B, 0x59, 0xE7, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_33_44).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_aes_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Aes(AesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0x75, 0x5E, 0x6A, 0x14, 0x13, 0x14, 0x15, 0x16, 0x70, 0x4B,
+                0xDB, 0xD1,
+            ]))
+        );
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x02).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Maced);
+
+        desfire
+            .write_data_maced(
+                FileId::new(0x02).unwrap(),
+                U24::new(0).unwrap(),
+                &[
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+                    0x0E, 0x0F,
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn writes_plain_data_from_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes write --aid 223344 --fid 03
+        //   -d F0E0D0C0B0A0908070605040302010 --keyno 0 --algo aes
+        // Plain write: no command MAC, response MAC ignored.
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x44, 0x33, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xAA, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0xB4, 0x72, 0xDB, 0x0D, 0x5D, 0xC8, 0x5F, 0xD2, 0x40, 0x92, 0xE4, 0xEB, 0x21,
+                    0xB3, 0xFF, 0xA2, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0x8F, 0x53, 0xA0, 0x8C, 0xC8, 0x42, 0xF1, 0x57,
+                    0x6F, 0xD1, 0xCD, 0x7D, 0x5B, 0x8D, 0xE1, 0x57, 0x62, 0x32, 0x26, 0xAB, 0x45,
+                    0x3E, 0x79, 0xAA, 0xD7, 0x3D, 0xDA, 0x0A, 0x2D, 0x4C, 0xD2, 0x2B, 0x00,
+                ][..],
+                &[
+                    0xE5, 0x7A, 0x40, 0x6C, 0xED, 0x55, 0x3F, 0x75, 0x7A, 0xC8, 0x91, 0x5A, 0x23,
+                    0x9F, 0xFE, 0x77, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x03, 0x00][..],
+                &[
+                    0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x46, 0xA3, 0xDD, 0x30, 0x03, 0x86,
+                    0xA9, 0xD3, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0x3D, 0x00, 0x00, 0x16, 0x03, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0xF0,
+                    0xE0, 0xD0, 0xC0, 0xB0, 0xA0, 0x90, 0x80, 0x70, 0x60, 0x50, 0x40, 0x30, 0x20,
+                    0x10, 0x00,
+                ][..],
+                &[0x15, 0x46, 0xB9, 0x94, 0x55, 0xDD, 0x31, 0x5A, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_33_44).unwrap())
+            .unwrap();
+        desfire
+            .authenticate_aes_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x03).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Plain);
+
+        desfire
+            .write_data(
+                FileId::new(0x03).unwrap(),
+                U24::new(0).unwrap(),
+                &[
+                    0xF0, 0xE0, 0xD0, 0xC0, 0xB0, 0xA0, 0x90, 0x80, 0x70, 0x60, 0x50, 0x40, 0x30,
+                    0x20, 0x10,
+                ],
+            )
+            .unwrap();
     }
 
     #[test]
