@@ -476,6 +476,102 @@ mod tests {
         );
     }
 
+    // Proxmark trace: `hf mfdes createfile --aid 111111 --fid 01 --amode plain --size 000010 -n 0 -t aes`
+    //   (backup data file)
+    // Session key: 01 02 03 04 B9 C5 B2 72 13 14 15 16 2A F9 A9 10
+    // Command: 90 CB 00 00 07 01 00 00 E0 10 00 00 00
+    //   fid=0x01, comm_mode=0x00(plain), access=0x00E0, size=0x000010
+    // Response: 3D 18 E5 09 38 6A A6 5A 91 00  (8-byte MAC + status OK)
+    #[test]
+    fn create_backup_data_file_cmac_matches_proxmark_trace() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xB9, 0xC5, 0xB2, 0x72, 0x13, 0x14, 0x15, 0x16, 0x2A, 0xF9,
+            0xA9, 0x10,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_BACKUP_DATA_FILE,
+                &[0x01, 0x00, 0x00, 0xE0, 0x10, 0x00, 0x00],
+            )
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x3D, 0x18, 0xE5, 0x09, 0x38, 0x6A, 0xA6, 0x5A]
+        );
+    }
+
+    // Proxmark trace: authenticated plain backup file write then commit
+    // Session key: 01 02 03 04 32 D0 98 89 13 14 15 16 36 02 82 D5
+    // Step 1 — GetFileSettings fid=0x01:
+    //   Command:  90 F5 00 00 01 01 00
+    //   Response: 01 00 00 E0 10 00 00 82 CE EF C8 D5 CA EE 72 91 00
+    // Step 2 — WriteData fid=0x01, offset=0, length=16:
+    //   Command:  90 3D 00 00 17 01 00 00 00 10 00 00 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 00
+    //   Response: C1 8B FE 41 A0 60 03 CA 91 00
+    // Step 3 — CommitTransaction:
+    //   Command:  90 C7 00 00 00 00
+    //   Response: A9 B7 49 07 A8 4E 98 B4 91 00
+    #[test]
+    fn write_and_commit_backup_file_cmac_chain() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x32, 0xD0, 0x98, 0x89, 0x13, 0x14, 0x15, 0x16, 0x36, 0x02,
+            0x82, 0xD5,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        // Step 1: GET_FILE_SETTINGS fid=0x01
+        session
+            .update_command_cmac(CommandCode::GET_FILE_SETTINGS, &[0x01])
+            .unwrap();
+        let mac1 = session
+            .update_response_cmac(
+                Status::OperationOk,
+                &[0x01, 0x00, 0x00, 0xE0, 0x10, 0x00, 0x00],
+            )
+            .unwrap();
+        assert_eq!(
+            mac1.as_bytes(),
+            [0x82, 0xCE, 0xEF, 0xC8, 0xD5, 0xCA, 0xEE, 0x72]
+        );
+
+        // Step 2: WRITE_DATA fid=0x01, offset=0x000000, length=0x000010, data=00..15
+        session
+            .update_command_cmac(
+                CommandCode::WRITE_DATA,
+                &[
+                    0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04,
+                    0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+                ],
+            )
+            .unwrap();
+        let mac2 = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+        assert_eq!(
+            mac2.as_bytes(),
+            [0xC1, 0x8B, 0xFE, 0x41, 0xA0, 0x60, 0x03, 0xCA]
+        );
+
+        // Step 3: COMMIT_TRANSACTION
+        session
+            .update_command_cmac(CommandCode::COMMIT_TRANSACTION, &[])
+            .unwrap();
+        let mac3 = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+        assert_eq!(
+            mac3.as_bytes(),
+            [0xA9, 0xB7, 0x49, 0x07, 0xA8, 0x4E, 0x98, 0xB4]
+        );
+    }
+
     // Proxmark trace: `hf mfdes createapp --aid 111111 -n 0 -t aes --dstalgo aes --numkeys 1`
     // PICC master key: 00..00 (default AES)
     // Session key reported by proxmark: 01 02 03 04 59 05 6A FD 13 14 15 16 0B A4 CE BF

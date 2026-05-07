@@ -20,6 +20,8 @@ impl CommandCode {
     pub const GET_VERSION: Self = Self(0x60);
     pub const GET_APPLICATION_IDS: Self = Self(0x6A);
     pub const FORMAT_PICC: Self = Self(0xFC);
+    pub const COMMIT_TRANSACTION: Self = Self(0xC7);
+    pub const ABORT_TRANSACTION: Self = Self(0xA7);
     pub const CREATE_APPLICATION: Self = Self(0xCA);
     pub const DELETE_APPLICATION: Self = Self(0xDA);
     pub const SELECT_APPLICATION: Self = Self(0x5A);
