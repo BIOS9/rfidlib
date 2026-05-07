@@ -1,5 +1,5 @@
 use crate::smart_card::Error;
-use pcsc::{ffi::DWORD, Card, MAX_BUFFER_SIZE};
+use pcsc::{ffi::DWORD, Card, Disposition, Protocols, ShareMode, MAX_BUFFER_SIZE};
 
 pub struct SmartCard {
     pcsc_card: Card,
@@ -35,6 +35,13 @@ impl SmartCard {
                 "Control command failed: {err}"
             ))),
         }
+    }
+
+    /// Resets the card via `SCardReconnect`, clearing any existing RF session state.
+    pub fn reset_card(&mut self) -> Result<(), Error> {
+        self.pcsc_card
+            .reconnect(ShareMode::Exclusive, Protocols::ANY, Disposition::ResetCard)
+            .map_err(|err| Error::CardCommunicateFailed(format!("Card reset failed: {err}")))
     }
 
     pub fn transmit_apdu(&mut self, apdu: &[u8]) -> Result<Vec<u8>, Error> {
