@@ -2,6 +2,8 @@ use std::env;
 use std::fs::File;
 use std::io::Read;
 
+mod desfire_integration;
+
 use gallagher_rfid_core::gallagher::credential::GallagherCredential;
 use gallagher_rfid_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
 use gallagher_rfid_core::gallagher::mifare_classic::{
@@ -123,6 +125,22 @@ fn main() {
             };
             read_desfire_tag(card, &desfire_args);
         }
+        "desfire-integration" | "desfire-itest" => {
+            let integration_args = match desfire_integration::parse_args(&args[2..]) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("desfire-integration: {error}");
+                    eprintln!(
+                        "Usage: {} desfire-integration [--yes] [--skip-format] [--picc-auth-aes <n>:<32_hex> | --picc-auth-2tdea <n>:<32_hex> | --picc-auth-3tdea <n>:<48_hex> | --picc-auth-des <n>:<16_hex>]",
+                        args[0]
+                    );
+                    std::process::exit(1);
+                }
+            };
+            if !desfire_integration::run(card, integration_args) {
+                std::process::exit(1);
+            }
+        }
         "desfire-format" => {
             let auth = match parse_optional_aes_auth(&args[2..]) {
                 Ok(a) => a,
@@ -181,7 +199,7 @@ fn main() {
             delete_desfire(card, &delete_args);
         }
         _ => {
-            eprintln!("Usage: {} [read|write|desfire|desfire-format|desfire-provision|desfire-delete|desfire-changekey]", args[0]);
+            eprintln!("Usage: {} [read|write|desfire|desfire-integration|desfire-format|desfire-provision|desfire-delete|desfire-changekey]", args[0]);
             std::process::exit(1);
         }
     }
