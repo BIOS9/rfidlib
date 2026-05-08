@@ -343,7 +343,9 @@ pub enum SessionKey {
 mod tests {
     use crate::mifare::desfire::{
         command::CommandCode,
-        crypto::{desfire_crc32, AesCmac, AesSessionKey},
+        crypto::{
+            desfire_crc32, AesCmac, AesSessionKey, ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
+        },
         key::KeyNumber,
         session::AuthenticatedSession,
         status::Status,
@@ -909,6 +911,95 @@ mod tests {
         assert_eq!(
             response_mac.as_bytes(),
             [0xA5, 0x4D, 0xBC, 0xAE, 0x76, 0x9D, 0x92, 0xD4]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes createapp --keyno 0 --algo 2TDEA --aid 444444 --dstalgo 2TDEA`
+    // Session key: 01 02 03 04 36 77 4F CB 01 02 03 04 36 77 4F CB
+    // Command: 90 CA 00 00 05 44 44 44 0F 0E 00
+    // Tag response: A3 4A DE 4C 38 02 E3 11 91 00
+    // Proxmark reported its calculated MAC as C7 24 59 1A 33 9B 23 56.
+    #[test]
+    fn create_application_2tdea_cmac_matches_proxmark_calculated_mac() {
+        let session_key = TwoKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x36, 0x77, 0x4F, 0xCB, 0x01, 0x02, 0x03, 0x04, 0x36, 0x77,
+            0x4F, 0xCB,
+        ]);
+        let mut session = AuthenticatedSession::new_2tdea(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_APPLICATION,
+                &[0x44, 0x44, 0x44, 0x0F, 0x0E],
+            )
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0xC7, 0x24, 0x59, 0x1A, 0x33, 0x9B, 0x23, 0x56]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes createapp --keyno 0 --algo 2TDEA --aid 444444 --dstalgo 2TDEA`
+    // Session key: 01 02 03 04 FB 23 ED 16 01 02 03 04 FB 23 ED 16
+    // Command: 90 CA 00 00 05 44 44 44 0F 0E 00
+    // Response: 25 5C 36 2D 21 49 B2 88 91 00
+    #[test]
+    fn create_application_2tdea_cmac_matches_successful_tag_trace() {
+        let session_key = TwoKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xFB, 0x23, 0xED, 0x16, 0x01, 0x02, 0x03, 0x04, 0xFB, 0x23,
+            0xED, 0x16,
+        ]);
+        let mut session = AuthenticatedSession::new_2tdea(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_APPLICATION,
+                &[0x44, 0x44, 0x44, 0x0F, 0x0E],
+            )
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x25, 0x5C, 0x36, 0x2D, 0x21, 0x49, 0xB2, 0x88]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes createapp --keyno 0 --algo 3TDEA --aid 555555 --dstalgo 3TDEA`
+    // Session key: 01 02 03 04 E3 63 90 66 07 08 09 10 D2 E8 98 DE
+    //              13 14 15 16 49 D8 C0 2A
+    // Command: 90 CA 00 00 05 55 55 55 0F 4E 00
+    // Response: 75 DF AA A4 8E CA 79 2A 91 00
+    #[test]
+    fn create_application_3tdea_cmac_matches_successful_tag_trace() {
+        let session_key = ThreeKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xE3, 0x63, 0x90, 0x66, 0x07, 0x08, 0x09, 0x10, 0xD2, 0xE8,
+            0x98, 0xDE, 0x13, 0x14, 0x15, 0x16, 0x49, 0xD8, 0xC0, 0x2A,
+        ]);
+        let mut session = AuthenticatedSession::new_3tdea(KeyNumber::new(0).unwrap(), session_key);
+
+        session
+            .update_command_cmac(
+                CommandCode::CREATE_APPLICATION,
+                &[0x55, 0x55, 0x55, 0x0F, 0x4E],
+            )
+            .unwrap();
+
+        let response_mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+
+        assert_eq!(
+            response_mac.as_bytes(),
+            [0x75, 0xDF, 0xAA, 0xA4, 0x8E, 0xCA, 0x79, 0x2A]
         );
     }
 }
