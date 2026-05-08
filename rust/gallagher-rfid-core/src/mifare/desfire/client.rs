@@ -4,8 +4,11 @@ use crate::mifare::desfire::{
     application::ApplicationId,
     command::{Command, CommandCode},
     crypto::{
-        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, desfire_crc32, AesSessionKey,
-        DesfireMac, RndA, RndB,
+        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, des_cbc_decrypt_in_place,
+        des_cbc_encrypt_in_place, desfire_crc16, desfire_crc32, tdes2_cbc_decrypt_in_place,
+        tdes2_cbc_encrypt_in_place, tdes3_cbc_decrypt_in_place, tdes3_cbc_encrypt_in_place,
+        AesSessionKey, DesSessionKey, RndA, RndA8, RndB, RndB8, ThreeKey3DesSessionKey,
+        TwoKey3DesSessionKey,
     },
     error::Error,
     executor::Executor,
@@ -140,12 +143,188 @@ where
         Ok(session)
     }
 
+    /// Performs 2TDEA (`AUTHENTICATE_ISO`) authentication with caller-provided reader randomness.
+    pub fn authenticate_2tdea_with_rnd_a(
+        &mut self,
+        key_number: KeyNumber,
+        key: &[u8; 16],
+        rnd_a: RndA8,
+    ) -> Result<AuthenticatedSession, Error> {
+        let session = self.authenticate_des_family_with_rnd_a(
+            CommandCode::AUTHENTICATE_ISO,
+            key_number,
+            |encrypted_rnd_b, out_rnd_b| {
+                tdes2_cbc_decrypt_in_place(key, &[0u8; 8], encrypted_rnd_b);
+                out_rnd_b.copy_from_slice(encrypted_rnd_b);
+            },
+            |rnd_a_bytes, rnd_b_rotated, iv, out| {
+                out[..8].copy_from_slice(rnd_a_bytes);
+                out[8..16].copy_from_slice(rnd_b_rotated);
+                tdes2_cbc_encrypt_in_place(key, iv, out);
+            },
+            |ciphertext, iv, out| {
+                out.copy_from_slice(ciphertext);
+                tdes2_cbc_decrypt_in_place(key, iv, out);
+            },
+            rnd_a,
+        )?;
+        let session_key = TwoKey3DesSessionKey::derive(session.0, session.1);
+        let auth_session = AuthenticatedSession::new_2tdea(key_number, session_key);
+        self.session = Session::Authenticated(auth_session);
+        Ok(auth_session)
+    }
+
+    /// Performs 3TDEA (`AUTHENTICATE_ISO`) authentication with caller-provided reader randomness.
+    pub fn authenticate_3tdea_with_rnd_a(
+        &mut self,
+        key_number: KeyNumber,
+        key: &[u8; 24],
+        rnd_a: RndA,
+    ) -> Result<AuthenticatedSession, Error> {
+        let command = Command::new(CommandCode::AUTHENTICATE_ISO, &[key_number.as_byte()])?;
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::AdditionalFrame {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 16 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let encrypted_rnd_b: [u8; 16] = response.data().try_into().expect("length is checked");
+        let mut rnd_b_bytes = encrypted_rnd_b;
+        tdes3_cbc_decrypt_in_place(key, &[0u8; 8], &mut rnd_b_bytes);
+        let rnd_b = RndB::new(rnd_b_bytes);
+
+        let mut challenge_response = [0u8; 32];
+        challenge_response[..16].copy_from_slice(&rnd_a.as_bytes());
+        challenge_response[16..].copy_from_slice(&rnd_b.rotate_left());
+        let challenge_iv: [u8; 8] = encrypted_rnd_b[8..16].try_into().expect("valid slice");
+        tdes3_cbc_encrypt_in_place(key, &challenge_iv, &mut challenge_response);
+
+        let response = self.executor.exchange_one(&Command::new(
+            CommandCode::ADDITIONAL_FRAME,
+            &challenge_response,
+        )?)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 16 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let mut returned_rnd_a: [u8; 16] = response.data().try_into().expect("length is checked");
+        let response_iv: [u8; 8] = challenge_response[24..32].try_into().expect("valid slice");
+        tdes3_cbc_decrypt_in_place(key, &response_iv, &mut returned_rnd_a);
+        if returned_rnd_a != rnd_a.rotate_left() {
+            return Err(Error::AuthenticationFailed);
+        }
+
+        let session_key = ThreeKey3DesSessionKey::derive(rnd_a, rnd_b);
+        let auth_session = AuthenticatedSession::new_3tdea(key_number, session_key);
+        self.session = Session::Authenticated(auth_session);
+        Ok(auth_session)
+    }
+
+    /// Performs legacy DES (`AUTHENTICATE_LEGACY`) authentication with caller-provided reader randomness.
+    pub fn authenticate_des_with_rnd_a(
+        &mut self,
+        key_number: KeyNumber,
+        key: &[u8; 8],
+        rnd_a: RndA8,
+    ) -> Result<AuthenticatedSession, Error> {
+        let session = self.authenticate_des_family_with_rnd_a(
+            CommandCode::AUTHENTICATE_LEGACY,
+            key_number,
+            |encrypted_rnd_b, out_rnd_b| {
+                des_cbc_decrypt_in_place(key, &[0u8; 8], encrypted_rnd_b);
+                out_rnd_b.copy_from_slice(encrypted_rnd_b);
+            },
+            |rnd_a_bytes, rnd_b_rotated, iv, out| {
+                out[..8].copy_from_slice(rnd_a_bytes);
+                out[8..16].copy_from_slice(rnd_b_rotated);
+                des_cbc_encrypt_in_place(key, iv, out);
+            },
+            |ciphertext, iv, out| {
+                out.copy_from_slice(ciphertext);
+                des_cbc_decrypt_in_place(key, iv, out);
+            },
+            rnd_a,
+        )?;
+        let session_key = DesSessionKey::derive(session.0, session.1);
+        let auth_session = AuthenticatedSession::new_des(key_number, session_key);
+        self.session = Session::Authenticated(auth_session);
+        Ok(auth_session)
+    }
+
+    /// Common DES-family authentication handshake.
+    ///
+    /// Returns `(RndA, RndB)` for session key derivation.
+    fn authenticate_des_family_with_rnd_a(
+        &mut self,
+        command_code: CommandCode,
+        key_number: KeyNumber,
+        decrypt_rnd_b: impl Fn(&mut [u8; 8], &mut [u8; 8]),
+        encrypt_challenge: impl Fn(&[u8; 8], &[u8; 8], &[u8; 8], &mut [u8; 16]),
+        decrypt_rnd_a_prime: impl Fn(&[u8; 8], &[u8; 8], &mut [u8; 8]),
+        rnd_a: RndA8,
+    ) -> Result<(RndA8, RndB8), Error> {
+        let command = Command::new(command_code, &[key_number.as_byte()])?;
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::AdditionalFrame {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 8 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        let mut enc_rnd_b: [u8; 8] = response.data().try_into().expect("length is checked");
+        let original_enc_rnd_b = enc_rnd_b;
+        let mut rnd_b_bytes = [0u8; 8];
+        decrypt_rnd_b(&mut enc_rnd_b, &mut rnd_b_bytes);
+        let rnd_b = RndB8::new(rnd_b_bytes);
+
+        let mut challenge_response = [0u8; 16];
+        encrypt_challenge(
+            &rnd_a.as_bytes(),
+            &rnd_b.rotate_left(),
+            &original_enc_rnd_b,
+            &mut challenge_response,
+        );
+
+        let response = self.executor.exchange_one(&Command::new(
+            CommandCode::ADDITIONAL_FRAME,
+            &challenge_response,
+        )?)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+        if response.data().len() != 8 {
+            return Err(Error::InvalidResponseLength);
+        }
+
+        // IV for final decryption = last 8 bytes of challenge_response.
+        let response_iv: [u8; 8] = challenge_response[8..16].try_into().expect("valid slice");
+        let mut returned_rnd_a = [0u8; 8];
+        let mut enc_rnd_a: [u8; 8] = response.data().try_into().expect("length is checked");
+        decrypt_rnd_a_prime(&mut enc_rnd_a, &response_iv, &mut returned_rnd_a);
+        if returned_rnd_a != rnd_a.rotate_left() {
+            return Err(Error::AuthenticationFailed);
+        }
+
+        Ok((rnd_a, rnd_b))
+    }
+
     /// Reads key settings for the currently selected application.
     pub fn get_key_settings(&mut self) -> Result<KeySettings, Error> {
         let command = Command::new(CommandCode::GET_KEY_SETTINGS, &[])?;
         let mut data: Vec<u8, 2> = Vec::new();
 
-        self.executor.execute(&command, &mut data)?;
+        if matches!(self.session, Session::Authenticated(_)) {
+            self.execute_single_maced(&command, &mut data)?;
+        } else {
+            self.executor.execute(&command, &mut data)?;
+        }
+
         KeySettings::parse(data.as_slice())
     }
 
@@ -441,7 +620,7 @@ where
         let ar = access_rights.to_bytes();
         let new_settings = [u8::from(communication_mode), ar[0], ar[1]];
 
-        // CRC32 covers [cmd_code || fid || new_settings].
+        // CRC covers [cmd_code || fid || new_settings].
         let mut crc_input: Vec<u8, 5> = Vec::new();
         crc_input
             .push(CommandCode::CHANGE_FILE_SETTINGS.as_byte())
@@ -452,16 +631,13 @@ where
         crc_input
             .extend_from_slice(&new_settings)
             .map_err(|_| Error::CommandTooLong)?;
-        let crc = desfire_crc32(crc_input.as_slice());
 
         let block_size = session.block_size();
         let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         plaintext
             .extend_from_slice(&new_settings)
             .map_err(|_| Error::CommandTooLong)?;
-        plaintext
-            .extend_from_slice(&crc)
-            .map_err(|_| Error::CommandTooLong)?;
+        extend_desfire_crc(&mut plaintext, crc_input.as_slice(), session.crc_size())?;
         while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
@@ -565,7 +741,7 @@ where
         // Decrypts in place using current chaining IV and updates chaining state to last ciphertext block.
         session.cbc_decrypt_in_place(decrypted.as_mut_slice())?;
 
-        let crc_size = session.crc_size();
+        let crc_size = session.encrypted_read_crc_size();
         let plaintext_len = encrypted_read_plaintext_len(
             decrypted.as_slice(),
             usize::try_from(length.as_u32()).expect("U24 fits in usize"),
@@ -660,16 +836,14 @@ where
         crc_input
             .extend_from_slice(data)
             .map_err(|_| Error::CommandTooLong)?;
-        let crc = desfire_crc32(crc_input.as_slice());
+        let crc_size = session.crc_size();
 
         let block_size = session.block_size();
         let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         plaintext
             .extend_from_slice(data)
             .map_err(|_| Error::CommandTooLong)?;
-        plaintext
-            .extend_from_slice(&crc)
-            .map_err(|_| Error::CommandTooLong)?;
+        extend_desfire_crc(&mut plaintext, crc_input.as_slice(), crc_size)?;
         while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
@@ -938,13 +1112,14 @@ fn verify_response_mac<'a>(
     status: Status,
     data: &'a [u8],
 ) -> Result<&'a [u8], Error> {
-    if data.len() < 8 {
+    let mac_len = session.mac_len();
+    if data.len() < mac_len {
         return Err(Error::InvalidResponseLength);
     }
 
-    let (body, mac) = data.split_at(data.len() - 8);
-    let mac = DesfireMac::new(mac.try_into().expect("split size is checked"));
-    if session.update_response_cmac(status, body)? != mac {
+    let (body, received) = data.split_at(data.len() - mac_len);
+    let expected = session.update_response_cmac(status, body)?;
+    if expected.as_bytes()[..mac_len] != *received {
         return Err(Error::InvalidMac);
     }
 
@@ -1003,12 +1178,35 @@ fn validate_encrypted_read_plaintext_len(
         .push(status.as_byte())
         .map_err(|_| Error::ResponseTooLong)?;
 
-    // CRC32 for AES and 3TDEA; CRC16 for DES/2TDEA (not yet implemented).
-    if desfire_crc32(crc_data.as_slice()) != decrypted[crc_start..crc_end] {
+    if !desfire_crc_matches(crc_data.as_slice(), &decrypted[crc_start..crc_end]) {
         return Err(Error::InvalidCrc);
     }
 
     Ok(plaintext_len)
+}
+
+fn extend_desfire_crc<const N: usize>(
+    out: &mut Vec<u8, N>,
+    data: &[u8],
+    crc_size: usize,
+) -> Result<(), Error> {
+    match crc_size {
+        2 => out
+            .extend_from_slice(&desfire_crc16(data))
+            .map_err(|_| Error::CommandTooLong),
+        4 => out
+            .extend_from_slice(&desfire_crc32(data))
+            .map_err(|_| Error::CommandTooLong),
+        _ => Err(Error::UnsupportedAlgorithm),
+    }
+}
+
+fn desfire_crc_matches(data: &[u8], expected: &[u8]) -> bool {
+    match expected.len() {
+        2 => desfire_crc16(data) == expected,
+        4 => desfire_crc32(data) == expected,
+        _ => false,
+    }
 }
 
 fn has_valid_encrypted_response_padding(padding: &[u8]) -> bool {
@@ -1058,7 +1256,10 @@ mod tests {
 
     use crate::mifare::desfire::{
         client::Desfire,
-        crypto::{aes_cbc_encrypt_in_place, AesSessionKey, RndA, RndB},
+        crypto::{
+            aes_cbc_encrypt_in_place, AesSessionKey, DesSessionKey, RndA, RndA8, RndB,
+            ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
+        },
         error::Error,
         file::{CommunicationMode, FileId, FileSettingsDetails},
         framing::{NativeFraming, WrappedFraming},
@@ -1282,6 +1483,501 @@ mod tests {
 
         assert_eq!(desfire.session(), Session::Unauthenticated);
         assert_eq!(desfire.authenticated_session(), None);
+    }
+
+    #[test]
+    fn authenticates_with_des_from_native_trace() {
+        let key = [0u8; 8];
+        let rnd_a = RndA8::new([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7]);
+
+        let transport = MockTransport::new([
+            (
+                &[0x0A, 0x00][..],
+                &[0xAF, 0x74, 0xF4, 0xAE, 0x77, 0x7A, 0xA4, 0x31, 0xE8][..],
+            ),
+            (
+                &[
+                    0xAF, 0x02, 0x46, 0xEC, 0xD6, 0xA6, 0x6B, 0x0C, 0x06, 0xFC, 0xEE, 0x17, 0x72,
+                    0x59, 0x76, 0xA7, 0xA4,
+                ][..],
+                &[0x00, 0x00, 0x41, 0x14, 0xFC, 0xBC, 0x1F, 0x0C, 0x48][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let session = desfire
+            .authenticate_des_with_rnd_a(KeyNumber::new(0).unwrap(), &key, rnd_a)
+            .unwrap();
+
+        assert_eq!(
+            session.session_key(),
+            SessionKey::Des(DesSessionKey::new([
+                0xA0, 0xA1, 0xA2, 0xA3, 0x00, 0x11, 0x22, 0x33
+            ]))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.executor().transport().index, 2);
+    }
+
+    #[test]
+    fn authenticates_with_2tdea_from_native_trace() {
+        let key = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F,
+        ];
+        let rnd_a = RndA8::new([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7]);
+
+        let transport = MockTransport::new([
+            (
+                &[0x1A, 0x01][..],
+                &[0xAF, 0xD1, 0x17, 0xBD, 0x63, 0x73, 0x54, 0x9F, 0xAA][..],
+            ),
+            (
+                &[
+                    0xAF, 0x88, 0x6E, 0xDC, 0xAE, 0x3F, 0xBC, 0x7F, 0xB2, 0x03, 0x98, 0x9F, 0xF0,
+                    0x7E, 0xCD, 0x71, 0x77,
+                ][..],
+                &[0x00, 0x47, 0xBF, 0xAA, 0x80, 0xFF, 0x4F, 0xD3, 0xE8][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, NativeFraming);
+
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(KeyNumber::new(1).unwrap(), &key, rnd_a)
+            .unwrap();
+
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0xA0, 0xA1, 0xA2, 0xA3, 0x00, 0x11, 0x22, 0x33, 0xA0, 0xA1, 0xA2, 0xA3, 0x00, 0x11,
+                0x22, 0x33
+            ]))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.executor().transport().index, 2);
+    }
+
+    #[test]
+    fn authenticates_with_wrapped_2tdea_picc_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0x0C, 0x96, 0x9F, 0x9B, 0xC6, 0xA8, 0x3B, 0x1D, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0xD2, 0xB4, 0x94, 0x64, 0xD4, 0x0B, 0x94, 0x81,
+                    0xF0, 0x08, 0x09, 0xEB, 0x2C, 0x4E, 0x16, 0x6E, 0x00,
+                ][..],
+                &[0xA7, 0x17, 0x3B, 0xA9, 0x34, 0x4C, 0x93, 0xE2, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+
+        assert_eq!(session.key_number(), KeyNumber::new(0).unwrap());
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xD6, 0x5D, 0x6A, 0xE3, 0x01, 0x02, 0x03, 0x04, 0xD6, 0x5D,
+                0x6A, 0xE3
+            ]))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.executor().transport().index, 2);
+    }
+
+    #[test]
+    fn authenticates_with_wrapped_2tdea_app_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x22, 0x22, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0x4C, 0xE0, 0x5C, 0x47, 0x6B, 0x59, 0xA1, 0xB4, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0x3B, 0xB5, 0xB4, 0xCB, 0x54, 0xC8, 0x06, 0xAC,
+                    0x32, 0x2B, 0x0A, 0x22, 0x3A, 0x60, 0x10, 0x4A, 0x00,
+                ][..],
+                &[0xAB, 0x0F, 0x7D, 0x0D, 0x13, 0xBF, 0x50, 0x0F, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_22_22).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+
+        assert_eq!(session.key_number(), KeyNumber::new(0).unwrap());
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0x3E, 0x66, 0x1F, 0x9F, 0x01, 0x02, 0x03, 0x04, 0x3E, 0x66,
+                0x1F, 0x9F
+            ]))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.executor().transport().index, 3);
+    }
+
+    #[test]
+    fn gets_key_settings_after_wrapped_2tdea_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x22, 0x22, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0xCF, 0xC0, 0xFA, 0x79, 0xDC, 0x47, 0x13, 0x82, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0x53, 0xA6, 0x13, 0x1F, 0xBC, 0x0E, 0xD7, 0x16,
+                    0xFD, 0x2A, 0x81, 0x0F, 0x22, 0xD9, 0xA7, 0x45, 0x00,
+                ][..],
+                &[0xB3, 0x68, 0x28, 0x5E, 0x00, 0x60, 0xD6, 0x74, 0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x45, 0x00, 0x00, 0x00][..],
+                &[
+                    0x0F, 0x0E, 0xA0, 0x9A, 0x96, 0x7A, 0x3F, 0x58, 0xF2, 0x05, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_22_22).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xDC, 0x81, 0x29, 0x28, 0x01, 0x02, 0x03, 0x04, 0xDC, 0x81,
+                0x29, 0x28
+            ]))
+        );
+
+        let settings = desfire.get_key_settings().unwrap();
+
+        assert_eq!(settings.raw_settings(), 0x0F);
+        assert_eq!(settings.raw_key_count(), 0x0E);
+        assert_eq!(settings.key_count(), 14);
+        assert_eq!(settings.key_type(), ApplicationKeyType::TwoKey3Des);
+        assert_eq!(desfire.executor().transport().index, 4);
+    }
+
+    #[test]
+    fn gets_key_settings_after_wrapped_3tdea_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x33, 0x33, 0x33, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0xE9, 0x22, 0x16, 0x2B, 0xAE, 0xB9, 0x36, 0x3E, 0x70, 0xCC, 0x92, 0x93, 0xBC,
+                    0x4E, 0x17, 0x86, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0xBF, 0x0D, 0x53, 0xD9, 0x6B, 0x8E, 0x5E, 0x09,
+                    0xFB, 0x5A, 0x52, 0xCC, 0xC5, 0x15, 0x6B, 0x22, 0x55, 0xC4, 0x9A, 0x73, 0xBD,
+                    0xC0, 0xBC, 0x02, 0xD4, 0xED, 0x6A, 0xC4, 0xDC, 0x85, 0x1E, 0xAE, 0x00,
+                ][..],
+                &[
+                    0x3C, 0x04, 0x88, 0xE8, 0xC2, 0x8C, 0x96, 0x85, 0xE7, 0x4E, 0xF9, 0x94, 0x20,
+                    0xF3, 0x39, 0xA5, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0x45, 0x00, 0x00, 0x00][..],
+                &[
+                    0x0F, 0x4E, 0x83, 0x1B, 0x4A, 0xB1, 0x9F, 0x5F, 0xD0, 0xA7, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x33_33_33).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_3tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 24],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::ThreeKey3Des(ThreeKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xE0, 0xB8, 0xA0, 0xA5, 0x07, 0x08, 0x09, 0x10, 0xD5, 0xD0,
+                0x06, 0x12, 0x13, 0x14, 0x15, 0x16, 0x36, 0x68, 0x59, 0x96
+            ]))
+        );
+
+        let settings = desfire.get_key_settings().unwrap();
+
+        assert_eq!(settings.raw_settings(), 0x0F);
+        assert_eq!(settings.raw_key_count(), 0x4E);
+        assert_eq!(settings.key_count(), 14);
+        assert_eq!(settings.key_type(), ApplicationKeyType::ThreeKey3Des);
+        assert_eq!(desfire.executor().transport().index, 4);
+    }
+
+    #[test]
+    fn reads_enciphered_data_after_wrapped_2tdea_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x22, 0x22, 0x22, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0x69, 0x0D, 0xDA, 0x3A, 0xF6, 0x16, 0x00, 0x9E, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0x2A, 0xE2, 0x17, 0xB9, 0x70, 0x86, 0x7B, 0xFC,
+                    0xD0, 0x47, 0x29, 0x43, 0xB8, 0xF7, 0x67, 0xEA, 0x00,
+                ][..],
+                &[0xCC, 0x58, 0x00, 0x9C, 0x98, 0x2E, 0x34, 0x41, 0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00, 0xE7, 0xF3, 0xAE, 0xCB, 0x32, 0x42,
+                    0x88, 0x03, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xBD, 0x00, 0x00, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                ][..],
+                &[
+                    0x7B, 0x05, 0x2A, 0xB7, 0x52, 0xDE, 0xF3, 0x7E, 0xE7, 0xE7, 0xB1, 0x53, 0x8C,
+                    0x2B, 0x70, 0x2E, 0xA0, 0x8A, 0x54, 0x0F, 0x8E, 0x47, 0x99, 0x44, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        let mut data: Vec<u8, 32> = Vec::new();
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x22_22_22).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0x85, 0xE9, 0x3D, 0x7F, 0x01, 0x02, 0x03, 0x04, 0x85, 0xE9,
+                0x3D, 0x7F
+            ]))
+        );
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x01).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Enciphered);
+        assert_eq!(
+            settings.details(),
+            FileSettingsDetails::Data {
+                size: U24::new(16).unwrap()
+            }
+        );
+
+        desfire
+            .read_data_enciphered(
+                FileId::new(0x01).unwrap(),
+                U24::new(0).unwrap(),
+                U24::new(0).unwrap(),
+                &mut data,
+            )
+            .unwrap();
+
+        assert_eq!(data.as_slice(), &[0u8; 16]);
+        assert_eq!(desfire.executor().transport().index, 5);
+    }
+
+    #[test]
+    fn reads_enciphered_data_after_wrapped_3tdea_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x33, 0x33, 0x33, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0x8F, 0x63, 0x57, 0xB8, 0xEA, 0xBA, 0x01, 0x54, 0x72, 0x70, 0xD7, 0x9F, 0x5C,
+                    0xAF, 0xA8, 0x4B, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0xFA, 0xAD, 0xD2, 0xB9, 0x05, 0x6E, 0x14, 0x48,
+                    0xC8, 0x77, 0x69, 0xFA, 0x05, 0x7D, 0xF0, 0xA7, 0x3B, 0x32, 0xD9, 0x10, 0x06,
+                    0xBF, 0xDE, 0x81, 0xD5, 0xBD, 0x38, 0x0D, 0xE6, 0xCE, 0xED, 0x9E, 0x00,
+                ][..],
+                &[
+                    0xE5, 0x62, 0xB9, 0x35, 0x7B, 0xE7, 0x78, 0xCC, 0x86, 0x8C, 0xB9, 0x59, 0x19,
+                    0xC0, 0x83, 0xD0, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x03, 0x00, 0x00, 0x10, 0x00, 0x00, 0xD3, 0x41, 0x2F, 0xAE, 0xAB, 0x6A,
+                    0x3E, 0x11, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xBD, 0x00, 0x00, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                ][..],
+                &[
+                    0xC0, 0x84, 0x2F, 0x5E, 0x72, 0x2E, 0x82, 0x3B, 0xF7, 0x58, 0xC5, 0x80, 0xA4,
+                    0xDC, 0xEC, 0x62, 0x38, 0x08, 0x01, 0xAB, 0x79, 0x8F, 0xA2, 0x16, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        let mut data: Vec<u8, 32> = Vec::new();
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x33_33_33).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_3tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 24],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::ThreeKey3Des(ThreeKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xD4, 0x6B, 0x8F, 0xB1, 0x07, 0x08, 0x09, 0x10, 0x40, 0x82,
+                0x4C, 0xED, 0x13, 0x14, 0x15, 0x16, 0x1C, 0x69, 0x90, 0x16
+            ]))
+        );
+
+        let settings = desfire
+            .get_file_settings(FileId::new(0x01).unwrap())
+            .unwrap();
+        assert_eq!(settings.communication_mode(), CommunicationMode::Enciphered);
+        assert_eq!(
+            settings.details(),
+            FileSettingsDetails::Data {
+                size: U24::new(16).unwrap()
+            }
+        );
+
+        desfire
+            .read_data_enciphered(
+                FileId::new(0x01).unwrap(),
+                U24::new(0).unwrap(),
+                U24::new(0).unwrap(),
+                &mut data,
+            )
+            .unwrap();
+
+        assert_eq!(data.as_slice(), &[0u8; 16]);
+        assert_eq!(desfire.executor().transport().index, 5);
+    }
+
+    #[test]
+    fn authenticates_with_wrapped_3tdea_app_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x5A, 0x00, 0x00, 0x03, 0x33, 0x33, 0x33, 0x00][..],
+                &[0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0x61, 0x26, 0x6B, 0xDB, 0xDA, 0xDF, 0xE7, 0xCD, 0xD4, 0xFE, 0xE3, 0x23, 0x9A,
+                    0xE8, 0x26, 0x9F, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0x37, 0x5F, 0x72, 0x86, 0xC3, 0x81, 0xD6, 0x94,
+                    0x6B, 0x6F, 0x4C, 0x80, 0x14, 0x79, 0x75, 0xBE, 0x6C, 0xAD, 0x9B, 0x2B, 0x10,
+                    0x3A, 0xDF, 0x31, 0x15, 0xA3, 0x6B, 0xB3, 0x07, 0xD1, 0x3E, 0x3F, 0x00,
+                ][..],
+                &[
+                    0x1F, 0x19, 0xDE, 0x9A, 0x33, 0x33, 0x5C, 0xD4, 0x47, 0x25, 0xBA, 0x57, 0x33,
+                    0xCA, 0xB9, 0x4F, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        desfire
+            .select_application(crate::mifare::desfire::ApplicationId::new(0x33_33_33).unwrap())
+            .unwrap();
+        let session = desfire
+            .authenticate_3tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 24],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+
+        assert_eq!(session.key_number(), KeyNumber::new(0).unwrap());
+        assert_eq!(
+            session.session_key(),
+            SessionKey::ThreeKey3Des(ThreeKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xC0, 0x06, 0x38, 0x44, 0x07, 0x08, 0x09, 0x10, 0x1D, 0x00,
+                0x99, 0xFA, 0x13, 0x14, 0x15, 0x16, 0x62, 0x2F, 0x4A, 0x01
+            ]))
+        );
+        assert_eq!(desfire.session(), Session::Authenticated(session));
+        assert_eq!(desfire.executor().transport().index, 3);
     }
 
     #[test]

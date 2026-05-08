@@ -23,8 +23,8 @@ pub use application::ApplicationId;
 pub use client::Desfire;
 pub use command::{Command, CommandCode, Response};
 pub use crypto::{
-    AesCmac, AesCmacChaining, AesSessionKey, DesSessionKey, DesfireMac, RndA, RndB,
-    ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
+    desfire_crc16, desfire_crc32, AesCmac, AesCmacChaining, AesSessionKey, DesSessionKey,
+    DesfireMac, RndA, RndA8, RndB, RndB8, ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
 };
 pub use error::Error;
 pub use executor::{Executor, MAX_ADDITIONAL_FRAMES};

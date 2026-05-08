@@ -16,7 +16,7 @@ use gallagher_rfid_core::mifare::desfire::crypto::aes_cbc_decrypt_in_place;
 use gallagher_rfid_core::mifare::desfire::{
     AccessCondition, AccessRights, ApplicationId, ApplicationKeyType, Command, CommandCode,
     CommunicationMode, Desfire, FileId, FileSettings, FileSettingsDetails, FileType, FrameCodec,
-    KeyNumber, KeySettings, RndA, Transport, WrappedFraming, U24,
+    KeyNumber, KeySettings, RndA, RndA8, Transport, WrappedFraming, U24,
 };
 use gallagher_rfid_pcsc::{
     acr122u::Acr122uReader,
@@ -115,7 +115,7 @@ fn main() {
                 Err(error) => {
                     eprintln!("desfire: {error}");
                     eprintln!(
-                        "Usage: {} desfire [--aid <hex>] [--auth-aes <key_number>:<32_hex>]",
+                        "Usage: {} desfire [--aid <hex>] [--auth-aes <n>:<32_hex>] [--auth-des <n>:<16_hex>] [--auth-2tdea <n>:<32_hex>] [--auth-3tdea <n>:<48_hex>]",
                         args[0]
                     );
                     std::process::exit(1);
@@ -190,9 +190,37 @@ fn main() {
 #[derive(Debug, Clone, Copy)]
 struct DesfireArgs {
     aid_filter: Option<ApplicationId>,
-    auth: Option<AesAuthSpec>,
+    auth: Option<DesfireAuthSpec>,
     debug_read: bool,
     write: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DesfireAuthSpec {
+    Aes(AesAuthSpec),
+    Des(DesAuthSpec),
+    Tdea2(Tdea2AuthSpec),
+    Tdea3(Tdea3AuthSpec),
+}
+
+impl DesfireAuthSpec {
+    const fn key_number(self) -> KeyNumber {
+        match self {
+            Self::Aes(spec) => spec.key_number,
+            Self::Des(spec) => spec.key_number,
+            Self::Tdea2(spec) => spec.key_number,
+            Self::Tdea3(spec) => spec.key_number,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Aes(_) => "AES",
+            Self::Des(_) => "DES",
+            Self::Tdea2(_) => "2TDEA",
+            Self::Tdea3(_) => "3TDEA",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,9 +229,27 @@ struct AesAuthSpec {
     key: [u8; 16],
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DesAuthSpec {
+    key_number: KeyNumber,
+    key: [u8; 8],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tdea2AuthSpec {
+    key_number: KeyNumber,
+    key: [u8; 16],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tdea3AuthSpec {
+    key_number: KeyNumber,
+    key: [u8; 24],
+}
+
 fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
     let mut aid_filter: Option<ApplicationId> = None;
-    let mut auth: Option<AesAuthSpec> = None;
+    let mut auth: Option<DesfireAuthSpec> = None;
     let mut debug_read = false;
     let mut write = false;
     let mut iter = args.iter();
@@ -219,7 +265,31 @@ fn parse_desfire_args(args: &[String]) -> Result<DesfireArgs, String> {
                 let value = iter
                     .next()
                     .ok_or_else(|| "--auth-aes requires <key_number>:<32_hex>".to_string())?;
-                auth = Some(parse_aes_auth_spec(value)?);
+                set_desfire_auth(&mut auth, DesfireAuthSpec::Aes(parse_aes_auth_spec(value)?))?;
+            }
+            "--auth-des" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--auth-des requires <key_number>:<16_hex>".to_string())?;
+                set_desfire_auth(&mut auth, DesfireAuthSpec::Des(parse_des_auth_spec(value)?))?;
+            }
+            "--auth-2tdea" | "--auth-2k3des" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--auth-2tdea requires <key_number>:<32_hex>".to_string())?;
+                set_desfire_auth(
+                    &mut auth,
+                    DesfireAuthSpec::Tdea2(parse_tdea2_auth_spec(value)?),
+                )?;
+            }
+            "--auth-3tdea" | "--auth-3k3des" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--auth-3tdea requires <key_number>:<48_hex>".to_string())?;
+                set_desfire_auth(
+                    &mut auth,
+                    DesfireAuthSpec::Tdea3(parse_tdea3_auth_spec(value)?),
+                )?;
             }
             "--debug-read" => {
                 debug_read = true;
@@ -312,23 +382,58 @@ fn parse_aid(value: &str) -> Result<ApplicationId, String> {
 }
 
 fn parse_aes_auth_spec(value: &str) -> Result<AesAuthSpec, String> {
+    let (key_number, key) = parse_keyed_hex_spec(value, "--auth-aes")?;
+    Ok(AesAuthSpec { key_number, key })
+}
+
+fn parse_des_auth_spec(value: &str) -> Result<DesAuthSpec, String> {
+    let (key_number, key) = parse_keyed_hex_spec(value, "--auth-des")?;
+    Ok(DesAuthSpec { key_number, key })
+}
+
+fn parse_tdea2_auth_spec(value: &str) -> Result<Tdea2AuthSpec, String> {
+    let (key_number, key) = parse_keyed_hex_spec(value, "--auth-2tdea")?;
+    Ok(Tdea2AuthSpec { key_number, key })
+}
+
+fn parse_tdea3_auth_spec(value: &str) -> Result<Tdea3AuthSpec, String> {
+    let (key_number, key) = parse_keyed_hex_spec(value, "--auth-3tdea")?;
+    Ok(Tdea3AuthSpec { key_number, key })
+}
+
+fn parse_keyed_hex_spec<const N: usize>(
+    value: &str,
+    option: &str,
+) -> Result<(KeyNumber, [u8; N]), String> {
     let (number_str, key_str) = value
         .split_once(':')
-        .ok_or_else(|| "--auth-aes expects <key_number>:<32_hex>".to_string())?;
+        .ok_or_else(|| format!("{option} expects <key_number>:<hex_key>"))?;
     let key_number_value: u8 = number_str
         .parse()
-        .map_err(|error| format!("--auth-aes key number: {error}"))?;
+        .map_err(|error| format!("{option} key number: {error}"))?;
     let key_number = KeyNumber::new(key_number_value)
-        .map_err(|error| format!("--auth-aes invalid key number: {error:?}"))?;
+        .map_err(|error| format!("{option} invalid key number: {error:?}"))?;
     let key_bytes =
-        parse_hex(key_str).ok_or_else(|| format!("--auth-aes invalid hex key: {key_str}"))?;
-    let key: [u8; 16] = key_bytes.as_slice().try_into().map_err(|_| {
+        parse_hex(key_str).ok_or_else(|| format!("{option} invalid hex key: {key_str}"))?;
+    let key: [u8; N] = key_bytes.as_slice().try_into().map_err(|_| {
         format!(
-            "--auth-aes expects 16-byte key (32 hex chars), got {} bytes",
-            key_bytes.len()
+            "{option} expects {}-byte key ({} hex chars), got {} bytes",
+            N,
+            N * 2,
+            key_bytes.len(),
         )
     })?;
-    Ok(AesAuthSpec { key_number, key })
+    Ok((key_number, key))
+}
+
+fn set_desfire_auth(
+    auth: &mut Option<DesfireAuthSpec>,
+    value: DesfireAuthSpec,
+) -> Result<(), String> {
+    if auth.replace(value).is_some() {
+        return Err("only one DESFire auth option may be supplied".to_string());
+    }
+    Ok(())
 }
 
 fn parse_hex(value: &str) -> Option<Vec<u8>> {
@@ -358,6 +463,12 @@ fn random_rnd_a() -> std::io::Result<RndA> {
     let mut bytes = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(RndA::new(bytes))
+}
+
+fn random_rnd_a8() -> std::io::Result<RndA8> {
+    let mut bytes = [0u8; 8];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(RndA8::new(bytes))
 }
 
 fn random_bytes(len: usize) -> std::io::Result<Vec<u8>> {
@@ -988,37 +1099,73 @@ fn process_application<T: Transport, C: FrameCodec>(
     }
 
     if let Some(auth_spec) = args.auth {
-        run_aes_auth_pass(desfire, application_id, auth_spec, &file_settings, args);
+        run_desfire_auth_pass(desfire, application_id, auth_spec, &file_settings, args);
     }
 }
 
-fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
+fn run_desfire_auth_pass<T: Transport, C: FrameCodec>(
     desfire: &mut Desfire<T, C>,
     application_id: ApplicationId,
-    auth_spec: AesAuthSpec,
+    auth_spec: DesfireAuthSpec,
     file_settings: &[(FileId, Option<FileSettings>)],
     args: &DesfireArgs,
 ) {
     println!(
-        "\n  --- AES auth (key {}, AID 0x{:06X}) ---",
-        auth_spec.key_number.as_byte(),
+        "\n  --- {} auth (key {}, AID 0x{:06X}) ---",
+        auth_spec.name(),
+        auth_spec.key_number().as_byte(),
         application_id.as_u32()
     );
     if let Err(error) = desfire.select_application(application_id) {
         eprintln!("    SelectApplication failed: {error:?}");
         return;
     }
-    let rnd_a = match random_rnd_a() {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("    /dev/urandom failed: {error}");
-            return;
+
+    let auth_result = match auth_spec {
+        DesfireAuthSpec::Aes(spec) => {
+            let rnd_a = match random_rnd_a() {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("    /dev/urandom failed: {error}");
+                    return;
+                }
+            };
+            desfire.authenticate_aes_with_rnd_a(spec.key_number, &spec.key, rnd_a)
+        }
+        DesfireAuthSpec::Des(spec) => {
+            let rnd_a = match random_rnd_a8() {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("    /dev/urandom failed: {error}");
+                    return;
+                }
+            };
+            desfire.authenticate_des_with_rnd_a(spec.key_number, &spec.key, rnd_a)
+        }
+        DesfireAuthSpec::Tdea2(spec) => {
+            let rnd_a = match random_rnd_a8() {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("    /dev/urandom failed: {error}");
+                    return;
+                }
+            };
+            desfire.authenticate_2tdea_with_rnd_a(spec.key_number, &spec.key, rnd_a)
+        }
+        DesfireAuthSpec::Tdea3(spec) => {
+            let rnd_a = match random_rnd_a() {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("    /dev/urandom failed: {error}");
+                    return;
+                }
+            };
+            desfire.authenticate_3tdea_with_rnd_a(spec.key_number, &spec.key, rnd_a)
         }
     };
-    if let Err(error) =
-        desfire.authenticate_aes_with_rnd_a(auth_spec.key_number, &auth_spec.key, rnd_a)
-    {
-        eprintln!("    AuthenticateAES failed: {error:?}");
+
+    if let Err(error) = auth_result {
+        eprintln!("    Authenticate{} failed: {error:?}", auth_spec.name());
         return;
     }
     println!("    Authenticated.");
@@ -1092,11 +1239,11 @@ fn run_aes_auth_pass<T: Transport, C: FrameCodec>(
     }
 
     if args.write {
-        run_aes_write_pass(desfire, file_settings);
+        run_desfire_write_pass(desfire, file_settings);
     }
 }
 
-fn run_aes_write_pass<T: Transport, C: FrameCodec>(
+fn run_desfire_write_pass<T: Transport, C: FrameCodec>(
     desfire: &mut Desfire<T, C>,
     file_settings: &[(FileId, Option<FileSettings>)],
 ) {

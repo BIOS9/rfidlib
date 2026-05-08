@@ -2,6 +2,7 @@ use aes::{
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
     Aes128,
 };
+use des::{Des, TdesEde2, TdesEde3};
 
 /// Reader challenge used during AES authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +197,42 @@ impl Default for AesCmacChaining {
     }
 }
 
+/// Reader challenge used during DES/3DES authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RndA8([u8; 8]);
+
+impl RndA8 {
+    pub const fn new(bytes: [u8; 8]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 8] {
+        self.0
+    }
+
+    pub fn rotate_left(self) -> [u8; 8] {
+        rotate_left8(self.0)
+    }
+}
+
+/// Card challenge returned during DES/3DES authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RndB8([u8; 8]);
+
+impl RndB8 {
+    pub const fn new(bytes: [u8; 8]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(self) -> [u8; 8] {
+        self.0
+    }
+
+    pub fn rotate_left(self) -> [u8; 8] {
+        rotate_left8(self.0)
+    }
+}
+
 /// DES session key (8 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesSessionKey([u8; 8]);
@@ -207,6 +244,14 @@ impl DesSessionKey {
 
     pub const fn as_bytes(self) -> [u8; 8] {
         self.0
+    }
+
+    /// Derives the `DESFire` single-DES session key: `RndA[0..4] || RndB[0..4]`.
+    pub fn derive(rnd_a: RndA8, rnd_b: RndB8) -> Self {
+        let mut out = [0u8; 8];
+        out[0..4].copy_from_slice(&rnd_a.as_bytes()[0..4]);
+        out[4..8].copy_from_slice(&rnd_b.as_bytes()[0..4]);
+        Self(out)
     }
 }
 
@@ -222,6 +267,19 @@ impl TwoKey3DesSessionKey {
     pub const fn as_bytes(self) -> [u8; 16] {
         self.0
     }
+
+    /// Derives the `DESFire` 2TDEA session key:
+    /// `RndA[0..4] || RndB[0..4] || RndA[0..4] || RndB[0..4]`.
+    pub fn derive(rnd_a: RndA8, rnd_b: RndB8) -> Self {
+        let a = rnd_a.as_bytes();
+        let b = rnd_b.as_bytes();
+        let mut out = [0u8; 16];
+        out[0..4].copy_from_slice(&a[0..4]);
+        out[4..8].copy_from_slice(&b[0..4]);
+        out[8..12].copy_from_slice(&a[0..4]);
+        out[12..16].copy_from_slice(&b[0..4]);
+        Self(out)
+    }
 }
 
 /// Three-key triple-DES session key (24 bytes).
@@ -235,6 +293,20 @@ impl ThreeKey3DesSessionKey {
 
     pub const fn as_bytes(self) -> [u8; 24] {
         self.0
+    }
+
+    /// Derives the `DESFire` 3TDEA session key from 16-byte authentication challenges.
+    pub fn derive(rnd_a: RndA, rnd_b: RndB) -> Self {
+        let a = rnd_a.as_bytes();
+        let b = rnd_b.as_bytes();
+        let mut out = [0u8; 24];
+        out[0..4].copy_from_slice(&a[0..4]);
+        out[4..8].copy_from_slice(&b[0..4]);
+        out[8..12].copy_from_slice(&a[6..10]);
+        out[12..16].copy_from_slice(&b[6..10]);
+        out[16..20].copy_from_slice(&a[12..16]);
+        out[20..24].copy_from_slice(&b[12..16]);
+        Self(out)
     }
 }
 
@@ -254,6 +326,165 @@ pub fn desfire_crc32(data: &[u8]) -> [u8; 4] {
     }
 
     crc.to_le_bytes()
+}
+
+/// Calculates ISO/IEC 14443-A `CRC_A`, used by legacy `DESFire` DES/2TDEA messaging.
+pub fn desfire_crc16(data: &[u8]) -> [u8; 2] {
+    let mut crc: u16 = 0x6363;
+
+    for &byte in data {
+        crc ^= u16::from(byte);
+        for _ in 0..8 {
+            if crc & 1 == 0 {
+                crc >>= 1;
+            } else {
+                crc = (crc >> 1) ^ 0x8408;
+            }
+        }
+    }
+
+    crc.to_le_bytes()
+}
+
+/// Decrypts one single-DES CBC block sequence in place.
+pub fn des_cbc_decrypt_in_place(key: &[u8; 8], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = Des::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        let encrypted: [u8; 8] = block.try_into().expect("chunk size is exact");
+        cipher.decrypt_block(block.into());
+        xor_block8(block, previous);
+        previous = encrypted;
+    }
+}
+
+/// Encrypts one single-DES CBC block sequence in place.
+pub fn des_cbc_encrypt_in_place(key: &[u8; 8], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = Des::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        xor_block8(block, previous);
+        cipher.encrypt_block(block.into());
+        previous.copy_from_slice(block);
+    }
+}
+
+/// Decrypts one 2TDEA CBC block sequence in place.
+pub fn tdes2_cbc_decrypt_in_place(key: &[u8; 16], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = TdesEde2::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        let encrypted: [u8; 8] = block.try_into().expect("chunk size is exact");
+        cipher.decrypt_block(block.into());
+        xor_block8(block, previous);
+        previous = encrypted;
+    }
+}
+
+/// Encrypts one 2TDEA CBC block sequence in place.
+pub fn tdes2_cbc_encrypt_in_place(key: &[u8; 16], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = TdesEde2::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        xor_block8(block, previous);
+        cipher.encrypt_block(block.into());
+        previous.copy_from_slice(block);
+    }
+}
+
+/// Decrypts one 3TDEA CBC block sequence in place.
+pub fn tdes3_cbc_decrypt_in_place(key: &[u8; 24], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = TdesEde3::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        let encrypted: [u8; 8] = block.try_into().expect("chunk size is exact");
+        cipher.decrypt_block(block.into());
+        xor_block8(block, previous);
+        previous = encrypted;
+    }
+}
+
+/// Encrypts one 3TDEA CBC block sequence in place.
+pub fn tdes3_cbc_encrypt_in_place(key: &[u8; 24], iv: &[u8; 8], data: &mut [u8]) {
+    assert!(data.len().is_multiple_of(8));
+    let cipher = TdesEde3::new(key.into());
+    let mut previous = *iv;
+    for block in data.chunks_exact_mut(8) {
+        xor_block8(block, previous);
+        cipher.encrypt_block(block.into());
+        previous.copy_from_slice(block);
+    }
+}
+
+/// Computes a 2TDEA CMAC (8-byte block size, 8-byte result).
+pub fn tdes2_cbc_mac(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> [u8; 8] {
+    des_family_cmac(*iv, data, |block| {
+        let cipher = TdesEde2::new(key.into());
+        cipher.encrypt_block(block.into());
+    })
+}
+
+/// Computes a 3TDEA CMAC (8-byte block size, 8-byte result).
+pub fn tdes3_cbc_mac(key: &[u8; 24], iv: &[u8; 8], data: &[u8]) -> [u8; 8] {
+    des_family_cmac(*iv, data, |block| {
+        let cipher = TdesEde3::new(key.into());
+        cipher.encrypt_block(block.into());
+    })
+}
+
+/// Computes a single-DES CMAC (8-byte block size, 8-byte result).
+pub fn des_cbc_mac(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> [u8; 8] {
+    des_family_cmac(*iv, data, |block| {
+        let cipher = Des::new(key.into());
+        cipher.encrypt_block(block.into());
+    })
+}
+
+fn des_family_cmac(iv: [u8; 8], data: &[u8], mut encrypt: impl FnMut(&mut [u8; 8])) -> [u8; 8] {
+    let mut subkey_1 = [0u8; 8];
+    encrypt(&mut subkey_1);
+    double_des_cmac_subkey(&mut subkey_1);
+    let mut subkey_2 = subkey_1;
+    double_des_cmac_subkey(&mut subkey_2);
+
+    let blocks = if data.is_empty() {
+        1
+    } else {
+        data.len().div_ceil(8)
+    };
+    let complete_last_block = !data.is_empty() && data.len().is_multiple_of(8);
+    let mut state = iv;
+
+    for block_index in 0..blocks.saturating_sub(1) {
+        let offset = block_index * 8;
+        xor_block8(
+            &mut state,
+            data[offset..offset + 8].try_into().expect("exact 8 bytes"),
+        );
+        encrypt(&mut state);
+    }
+
+    let mut last_block = [0u8; 8];
+    let last_offset = blocks.saturating_sub(1) * 8;
+    if complete_last_block {
+        last_block.copy_from_slice(&data[last_offset..last_offset + 8]);
+        xor_block8(&mut last_block, subkey_1);
+    } else {
+        let last_len = data.len().saturating_sub(last_offset);
+        last_block[..last_len].copy_from_slice(&data[last_offset..]);
+        last_block[last_len] = 0x80;
+        xor_block8(&mut last_block, subkey_2);
+    }
+
+    xor_block8(&mut state, last_block);
+    encrypt(&mut state);
+
+    state
 }
 
 /// Decrypts one AES-CBC block sequence in place.
@@ -323,6 +554,34 @@ fn rotate_left(mut bytes: [u8; 16]) -> [u8; 16] {
     bytes
 }
 
+fn rotate_left8(mut bytes: [u8; 8]) -> [u8; 8] {
+    bytes.rotate_left(1);
+    bytes
+}
+
+fn double_des_cmac_subkey(block: &mut [u8; 8]) {
+    let carry = block[0] & 0x80 != 0;
+    shift_left_one_bit8(block);
+    if carry {
+        block[7] ^= 0x1B;
+    }
+}
+
+fn shift_left_one_bit8(block: &mut [u8; 8]) {
+    let mut carry = 0;
+    for byte in block.iter_mut().rev() {
+        let next_carry = *byte >> 7;
+        *byte = (*byte << 1) | carry;
+        carry = next_carry;
+    }
+}
+
+fn xor_block8(block: &mut [u8], mask: [u8; 8]) {
+    for (byte, m) in block.iter_mut().zip(mask) {
+        *byte ^= m;
+    }
+}
+
 fn split_cmac_blocks(data: &[u8]) -> (usize, usize) {
     if data.is_empty() {
         return (1, 0);
@@ -345,8 +604,11 @@ fn xor_block(block: &mut [u8], mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use crate::mifare::desfire::crypto::{
-        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, desfire_crc32, AesCmac,
-        AesCmacChaining, AesSessionKey, RndA, RndB,
+        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, des_cbc_decrypt_in_place,
+        des_cbc_encrypt_in_place, desfire_crc16, desfire_crc32, tdes2_cbc_decrypt_in_place,
+        tdes2_cbc_encrypt_in_place, tdes3_cbc_decrypt_in_place, tdes3_cbc_encrypt_in_place,
+        AesCmac, AesCmacChaining, AesSessionKey, DesSessionKey, RndA, RndA8, RndB, RndB8,
+        ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
     };
 
     #[test]
@@ -388,6 +650,49 @@ mod tests {
     }
 
     #[test]
+    fn rotates_8_byte_challenges_left() {
+        let rnd_a = RndA8::new([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+
+        assert_eq!(
+            rnd_a.rotate_left(),
+            [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x00]
+        );
+    }
+
+    #[test]
+    fn derives_des_family_session_keys() {
+        let rnd_a8 = RndA8::new([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7]);
+        let rnd_b8 = RndB8::new([0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7]);
+        let rnd_a = RndA::new([
+            0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD,
+            0xAE, 0xAF,
+        ]);
+        let rnd_b = RndB::new([
+            0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD,
+            0xBE, 0xBF,
+        ]);
+
+        assert_eq!(
+            DesSessionKey::derive(rnd_a8, rnd_b8).as_bytes(),
+            [0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1, 0xB2, 0xB3]
+        );
+        assert_eq!(
+            TwoKey3DesSessionKey::derive(rnd_a8, rnd_b8).as_bytes(),
+            [
+                0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1, 0xB2, 0xB3, 0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1,
+                0xB2, 0xB3
+            ]
+        );
+        assert_eq!(
+            ThreeKey3DesSessionKey::derive(rnd_a, rnd_b).as_bytes(),
+            [
+                0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1, 0xB2, 0xB3, 0xA6, 0xA7, 0xA8, 0xA9, 0xB6, 0xB7,
+                0xB8, 0xB9, 0xAC, 0xAD, 0xAE, 0xAF, 0xBC, 0xBD, 0xBE, 0xBF
+            ]
+        );
+    }
+
+    #[test]
     fn aes_cbc_roundtrip() {
         let key = [0x11; 16];
         let iv = [0x22; 16];
@@ -402,6 +707,59 @@ mod tests {
         assert_ne!(data, original);
 
         aes_cbc_decrypt_in_place(&key, &iv, &mut data);
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn des_cbc_matches_known_block_vector() {
+        let key = [0x13, 0x34, 0x57, 0x79, 0x9B, 0xBC, 0xDF, 0xF1];
+        let iv = [0u8; 8];
+        let mut data = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
+
+        des_cbc_encrypt_in_place(&key, &iv, &mut data);
+        assert_eq!(data, [0x85, 0xE8, 0x13, 0x54, 0x0F, 0x0A, 0xB4, 0x05]);
+
+        des_cbc_decrypt_in_place(&key, &iv, &mut data);
+        assert_eq!(data, [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]);
+    }
+
+    #[test]
+    fn tdes2_cbc_roundtrip() {
+        let key = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F,
+        ];
+        let iv = [0x22; 8];
+        let mut data = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F,
+        ];
+        let original = data;
+
+        tdes2_cbc_encrypt_in_place(&key, &iv, &mut data);
+        assert_ne!(data, original);
+
+        tdes2_cbc_decrypt_in_place(&key, &iv, &mut data);
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn tdes3_cbc_roundtrip() {
+        let key = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        ];
+        let iv = [0x33; 8];
+        let mut data = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F,
+        ];
+        let original = data;
+
+        tdes3_cbc_encrypt_in_place(&key, &iv, &mut data);
+        assert_ne!(data, original);
+
+        tdes3_cbc_decrypt_in_place(&key, &iv, &mut data);
         assert_eq!(data, original);
     }
 
@@ -498,6 +856,12 @@ mod tests {
 
         data[16] = 0xAF;
         assert_ne!(desfire_crc32(&data), [0x82, 0xD5, 0x50, 0xCE]);
+    }
+
+    #[test]
+    fn desfire_crc16_matches_iso14443a_crc_a_vector() {
+        assert_eq!(desfire_crc16(&[0x12]), [0x6D, 0x62]);
+        assert_ne!(desfire_crc16(&[0x13]), [0x6D, 0x62]);
     }
 
     #[test]

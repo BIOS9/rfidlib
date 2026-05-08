@@ -3,8 +3,11 @@ use heapless::Vec;
 use crate::mifare::desfire::{
     command::CommandCode,
     crypto::{
-        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, AesCmacChaining, AesSessionKey,
-        DesSessionKey, DesfireMac, ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
+        aes_cbc_decrypt_in_place, aes_cbc_encrypt_in_place, des_cbc_decrypt_in_place,
+        des_cbc_encrypt_in_place, des_cbc_mac, tdes2_cbc_decrypt_in_place,
+        tdes2_cbc_encrypt_in_place, tdes2_cbc_mac, tdes3_cbc_decrypt_in_place,
+        tdes3_cbc_encrypt_in_place, tdes3_cbc_mac, AesCmacChaining, AesSessionKey, DesSessionKey,
+        DesfireMac, ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
     },
     error::Error,
     key::KeyNumber,
@@ -140,6 +143,25 @@ impl AuthenticatedSession {
         }
     }
 
+    /// CRC size in bytes used by encrypted `ReadData` response plaintexts.
+    ///
+    /// EV1 secure messaging returns a CRC32 trailer for 2TDEA encrypted reads,
+    /// even though other 2TDEA encrypted payloads use CRC16.
+    pub const fn encrypted_read_crc_size(&self) -> usize {
+        match self.state {
+            AlgoState::Aes(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => 4,
+            AlgoState::Des(_) => 2,
+        }
+    }
+
+    /// MAC size in bytes used on the wire for this session.
+    ///
+    /// All algorithms use 8 bytes: AES uses the first 8 of the 16-byte CMAC;
+    /// DES variants use the full 8-byte CBC-MAC output.
+    pub const fn mac_len(&self) -> usize {
+        8
+    }
+
     /// Returns the AES-specific session key and CMAC chaining state, if this is an AES session.
     ///
     /// Returns `None` for all other algorithm families.
@@ -169,8 +191,20 @@ impl AuthenticatedSession {
                 let key = s.key;
                 Ok(s.chaining.update(key, input.as_slice()).desfire_mac())
             }
-            AlgoState::Des(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => {
-                Err(Error::UnsupportedAlgorithm)
+            AlgoState::Des(s) => {
+                let mac = des_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
+            }
+            AlgoState::TwoKey3Des(s) => {
+                let mac = tdes2_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
+            }
+            AlgoState::ThreeKey3Des(s) => {
+                let mac = tdes3_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
             }
         }
     }
@@ -194,8 +228,20 @@ impl AuthenticatedSession {
                 let key = s.key;
                 Ok(s.chaining.update(key, input.as_slice()).desfire_mac())
             }
-            AlgoState::Des(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => {
-                Err(Error::UnsupportedAlgorithm)
+            AlgoState::Des(s) => {
+                let mac = des_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
+            }
+            AlgoState::TwoKey3Des(s) => {
+                let mac = tdes2_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
+            }
+            AlgoState::ThreeKey3Des(s) => {
+                let mac = tdes3_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                s.chaining = mac;
+                Ok(des_mac_to_desfire_mac(mac))
             }
         }
     }
@@ -219,8 +265,26 @@ impl AuthenticatedSession {
                 s.chaining = AesCmacChaining::from_state(last_block);
                 Ok(())
             }
-            AlgoState::Des(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => {
-                Err(Error::UnsupportedAlgorithm)
+            AlgoState::Des(s) => {
+                let last_block: [u8; 8] =
+                    data[data.len() - 8..].try_into().expect("length checked");
+                des_cbc_decrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = last_block;
+                Ok(())
+            }
+            AlgoState::TwoKey3Des(s) => {
+                let last_block: [u8; 8] =
+                    data[data.len() - 8..].try_into().expect("length checked");
+                tdes2_cbc_decrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = last_block;
+                Ok(())
+            }
+            AlgoState::ThreeKey3Des(s) => {
+                let last_block: [u8; 8] =
+                    data[data.len() - 8..].try_into().expect("length checked");
+                tdes3_cbc_decrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = last_block;
+                Ok(())
             }
         }
     }
@@ -243,11 +307,27 @@ impl AuthenticatedSession {
                 s.chaining = AesCmacChaining::from_state(last_block);
                 Ok(())
             }
-            AlgoState::Des(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => {
-                Err(Error::UnsupportedAlgorithm)
+            AlgoState::Des(s) => {
+                des_cbc_encrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = data[data.len() - 8..].try_into().expect("length checked");
+                Ok(())
+            }
+            AlgoState::TwoKey3Des(s) => {
+                tdes2_cbc_encrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = data[data.len() - 8..].try_into().expect("length checked");
+                Ok(())
+            }
+            AlgoState::ThreeKey3Des(s) => {
+                tdes3_cbc_encrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                s.chaining = data[data.len() - 8..].try_into().expect("length checked");
+                Ok(())
             }
         }
     }
+}
+
+fn des_mac_to_desfire_mac(mac: [u8; 8]) -> DesfireMac {
+    DesfireMac::new(mac)
 }
 
 /// Authenticated secure-messaging key material.
@@ -352,18 +432,22 @@ mod tests {
         let aes = AuthenticatedSession::new_aes(kn, AesSessionKey::new([0; 16]));
         assert_eq!(aes.block_size(), 16);
         assert_eq!(aes.crc_size(), 4);
+        assert_eq!(aes.encrypted_read_crc_size(), 4);
 
         let des = AuthenticatedSession::new_des(kn, DesSessionKey::new([0; 8]));
         assert_eq!(des.block_size(), 8);
         assert_eq!(des.crc_size(), 2);
+        assert_eq!(des.encrypted_read_crc_size(), 2);
 
         let tdea2 = AuthenticatedSession::new_2tdea(kn, TwoKey3DesSessionKey::new([0; 16]));
         assert_eq!(tdea2.block_size(), 8);
         assert_eq!(tdea2.crc_size(), 2);
+        assert_eq!(tdea2.encrypted_read_crc_size(), 4);
 
         let tdea3 = AuthenticatedSession::new_3tdea(kn, ThreeKey3DesSessionKey::new([0; 24]));
         assert_eq!(tdea3.block_size(), 8);
         assert_eq!(tdea3.crc_size(), 4);
+        assert_eq!(tdea3.encrypted_read_crc_size(), 4);
     }
 
     // Proxmark trace: `hf mfdes formatpicc -n 0 -t aes`
