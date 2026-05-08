@@ -925,7 +925,10 @@ where
             return Err(Error::MissingAuthentication);
         };
 
-        session.update_command_cmac(command.code(), command.data())?;
+        #[allow(unused_variables)] // The cmac value is not used in nostd due to the logging call below
+        let cmac = session.update_command_cmac(command.code(), command.data())?;
+        #[cfg(feature = "std")]
+        std::eprintln!("[debug read_enc] cmd_cmac/IV: {:02X?}", cmac.as_bytes());
 
         let response = self.executor.exchange_one(&command)?;
         if response.status() != Status::OperationOk {
@@ -936,6 +939,9 @@ where
             return Err(Error::InvalidResponseLength);
         }
 
+        #[cfg(feature = "std")]
+        std::eprintln!("[debug read_enc] ciphertext: {:02X?}", response.data());
+
         let mut decrypted: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
         decrypted
             .extend_from_slice(response.data())
@@ -943,6 +949,9 @@ where
 
         // Decrypts in place using current chaining IV and updates chaining state to last ciphertext block.
         session.cbc_decrypt_in_place(decrypted.as_mut_slice())?;
+
+        #[cfg(feature = "std")]
+        std::eprintln!("[debug read_enc] decrypted:  {:02X?}", decrypted.as_slice());
 
         let crc_size = session.encrypted_read_crc_size();
         let plaintext_len = encrypted_read_plaintext_len(
@@ -1465,10 +1474,10 @@ mod tests {
             ThreeKey3DesSessionKey, TwoKey3DesSessionKey,
         },
         error::Error,
-        file::{CommunicationMode, FileId, FileSettingsDetails},
+        file::{AccessCondition, AccessRights, CommunicationMode, FileId, FileSettingsDetails},
         framing::{NativeFraming, WrappedFraming},
         key::{ApplicationKeyType, KeyNumber, KeySettings},
-        session::{Session, SessionKey},
+        session::{AuthenticatedSession, Session, SessionKey},
         transport::{Frame, Transport},
         types::U24,
     };
@@ -3299,6 +3308,106 @@ mod tests {
     // TX: 90 CA 00 00 05 22 22 22 0F 81 00  (wrapped; native: CA 22 22 22 0F 81)
     // RX: 91 00  (wrapped; native: 00)  — no MAC when unauthenticated
     #[test]
+    fn change_file_settings_2tdea_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes chfilesettings --aid 222222 --fid 01
+        //   --rrights key1 --wrights key1 --rwrights key1 --chrights key0 -n 0 -t 2tdea
+        // Session key: 01 02 03 04 51 99 63 96 01 02 03 04 51 99 63 96
+        // GetFileSettings cmd:  90 F5 00 00 01 01 00
+        //                 rsp:  00 00 10 11 10 00 00 0C 38 70 35 84 D6 7E 10 91 00
+        // ChangeFileSettings cmd: 90 5F 00 00 09 01 6A 40 3C 01 E8 88 23 2F 00
+        //                   rsp: 10 CD 6F 8D C3 D3 42 B9 91 00
+        let session_key = TwoKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x51, 0x99, 0x63, 0x96, 0x01, 0x02, 0x03, 0x04, 0x51, 0x99,
+            0x63, 0x96,
+        ]);
+        let auth_session = AuthenticatedSession::new_2tdea(KeyNumber::new(0).unwrap(), session_key);
+
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x00, 0x10, 0x11, 0x10, 0x00, 0x00, 0x0C, 0x38, 0x70, 0x35, 0x84, 0xD6,
+                    0x7E, 0x10, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0x5F, 0x00, 0x00, 0x09, 0x01, 0x6A, 0x40, 0x3C, 0x01, 0xE8, 0x88, 0x23,
+                    0x2F, 0x00,
+                ][..],
+                &[0x10, 0xCD, 0x6F, 0x8D, 0xC3, 0xD3, 0x42, 0xB9, 0x91, 0x00][..],
+            ),
+        ]);
+
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        desfire.session = Session::Authenticated(auth_session);
+
+        let key0 = AccessCondition::Key(KeyNumber::new(0).unwrap());
+        let key1 = AccessCondition::Key(KeyNumber::new(1).unwrap());
+        let access_rights = AccessRights::new(key1, key1, key1, key0);
+
+        desfire
+            .get_file_settings(FileId::new(1).unwrap())
+            .unwrap();
+        desfire
+            .change_file_settings(FileId::new(1).unwrap(), CommunicationMode::Plain, access_rights)
+            .unwrap();
+
+        assert_eq!(desfire.executor().transport().index, 2);
+    }
+
+    #[test]
+    fn read_data_maced_2tdea_zero_key1_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes read --aid 222222 --fid 01 -n 1 -t 2tdea
+        // Session key: 01 02 03 04 FC 67 24 71 01 02 03 04 FC 67 24 71
+        // GetFileSettings cmd:  90 F5 00 00 01 01 00
+        //                 rsp:  00 00 10 11 10 00 00 4F 25 14 78 C4 F0 66 FC 91 00
+        // ReadData cmd:  90 BD 00 00 07 01 00 00 00 00 00 00 00 00
+        //          rsp:  00*16 AF 4E 90 AE AE 3A DC F4 91 00
+        let session_key = TwoKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0xFC, 0x67, 0x24, 0x71, 0x01, 0x02, 0x03, 0x04, 0xFC, 0x67,
+            0x24, 0x71,
+        ]);
+        let auth_session = AuthenticatedSession::new_2tdea(KeyNumber::new(1).unwrap(), session_key);
+
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0xF5, 0x00, 0x00, 0x01, 0x01, 0x00][..],
+                &[
+                    0x00, 0x00, 0x10, 0x11, 0x10, 0x00, 0x00, 0x4F, 0x25, 0x14, 0x78, 0xC4, 0xF0,
+                    0x66, 0xFC, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xBD, 0x00, 0x00, 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00][..],
+                &[
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0xAF, 0x4E, 0x90, 0xAE, 0xAE, 0x3A, 0xDC, 0xF4, 0x91, 0x00,
+                ][..],
+            ),
+        ]);
+
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        desfire.session = Session::Authenticated(auth_session);
+
+        let mut data: Vec<u8, 32> = Vec::new();
+        desfire
+            .get_file_settings(FileId::new(1).unwrap())
+            .unwrap();
+        desfire
+            .read_data_maced(
+                FileId::new(1).unwrap(),
+                U24::new(0).unwrap(),
+                U24::new(0).unwrap(),
+                &mut data,
+            )
+            .unwrap();
+
+        assert_eq!(data.as_slice(), &[0u8; 16]);
+        assert_eq!(desfire.executor().transport().index, 2);
+    }
+
+    #[test]
     fn creates_application_unauthenticated() {
         let transport =
             MockTransport::new([(&[0xCA, 0x22, 0x22, 0x22, 0x0F, 0x81][..], &[0x00][..])]);
@@ -3309,6 +3418,39 @@ mod tests {
 
         desfire.create_application(aid, ks).unwrap();
 
+        assert_eq!(desfire.executor().transport().index, 1);
+    }
+
+    #[test]
+    fn changes_2tdea_app_key_different_key_proxmark_trace() {
+        // Proxmark3 trace: hf mfdes changekey --aid 222222 -t 2tdea -n 0 --newkeyno 1 --verbose --apdu
+        // Auth key 0: 2tdea zero key.  New/old key 1: 2tdea zero key.
+        // Session key: 01 02 03 04 82 E4 29 94 01 02 03 04 82 E4 29 94
+        // Command: 90 C4 00 00 19 01 13 85 5D BB EC 9A 5C CB BB 34 92 D8 97 98 DC 8D AE C7 52 BF ED 26 55 AF 00
+        // Response: 2D 23 DD E4 FF 07 EB 0E 91 00
+        let session_key = TwoKey3DesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x82, 0xE4, 0x29, 0x94, 0x01, 0x02, 0x03, 0x04, 0x82, 0xE4,
+            0x29, 0x94,
+        ]);
+        let auth_session = AuthenticatedSession::new_2tdea(KeyNumber::new(0).unwrap(), session_key);
+
+        let transport = MockTransport::new([(
+            &[
+                0x90, 0xC4, 0x00, 0x00, 0x19, 0x01, 0x13, 0x85, 0x5D, 0xBB, 0xEC, 0x9A, 0x5C,
+                0xCB, 0xBB, 0x34, 0x92, 0xD8, 0x97, 0x98, 0xDC, 0x8D, 0xAE, 0xC7, 0x52, 0xBF,
+                0xED, 0x26, 0x55, 0xAF, 0x00,
+            ][..],
+            &[0x2D, 0x23, 0xDD, 0xE4, 0xFF, 0x07, 0xEB, 0x0E, 0x91, 0x00][..],
+        )]);
+
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+        desfire.session = Session::Authenticated(auth_session);
+
+        desfire
+            .change_key_2tdea(KeyNumber::new(1).unwrap(), [0u8; 16], Some([0u8; 16]))
+            .unwrap();
+
+        assert!(matches!(desfire.session, Session::Authenticated(_)));
         assert_eq!(desfire.executor().transport().index, 1);
     }
 }
