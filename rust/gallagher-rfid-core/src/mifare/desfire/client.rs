@@ -1255,6 +1255,7 @@ mod tests {
     use heapless::Vec;
 
     use crate::mifare::desfire::{
+        application::ApplicationId,
         client::Desfire,
         crypto::{
             aes_cbc_encrypt_in_place, AesSessionKey, DesSessionKey, RndA, RndA8, RndB,
@@ -1263,7 +1264,7 @@ mod tests {
         error::Error,
         file::{CommunicationMode, FileId, FileSettingsDetails},
         framing::{NativeFraming, WrappedFraming},
-        key::{ApplicationKeyType, KeyNumber},
+        key::{ApplicationKeyType, KeyNumber, KeySettings},
         session::{Session, SessionKey},
         transport::{Frame, Transport},
         types::U24,
@@ -1924,6 +1925,155 @@ mod tests {
 
         assert_eq!(data.as_slice(), &[0u8; 16]);
         assert_eq!(desfire.executor().transport().index, 5);
+    }
+
+    #[test]
+    fn rejects_2tdea_create_application_response_mac_mismatch_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0x5B, 0x2F, 0x6A, 0x2E, 0x60, 0x8D, 0x0E, 0xA2, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0x0A, 0x41, 0xF6, 0x7B, 0x5D, 0x18, 0x64, 0x96,
+                    0x7B, 0xF9, 0x59, 0xEB, 0x43, 0x3C, 0xDE, 0xF7, 0x00,
+                ][..],
+                &[0xC6, 0x74, 0x80, 0xFC, 0x2E, 0xE8, 0xC3, 0xB2, 0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xCA, 0x00, 0x00, 0x05, 0x44, 0x44, 0x44, 0x0F, 0x0E, 0x00][..],
+                &[0xA3, 0x4A, 0xDE, 0x4C, 0x38, 0x02, 0xE3, 0x11, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0x36, 0x77, 0x4F, 0xCB, 0x01, 0x02, 0x03, 0x04, 0x36, 0x77,
+                0x4F, 0xCB
+            ]))
+        );
+
+        let error = desfire
+            .create_application(
+                ApplicationId::new(0x44_44_44).unwrap(),
+                KeySettings::new(0x0F, ApplicationKeyType::TwoKey3Des, 14),
+            )
+            .unwrap_err();
+
+        assert_eq!(error, Error::InvalidMac);
+        assert_eq!(desfire.executor().transport().index, 3);
+    }
+
+    #[test]
+    fn creates_2tdea_application_after_wrapped_2tdea_picc_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[0xF4, 0xE9, 0x46, 0xE0, 0xA1, 0x9B, 0x4A, 0x9E, 0x91, 0xAF][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x10, 0x49, 0x68, 0x39, 0x46, 0x15, 0x1C, 0xEE, 0xA7,
+                    0x51, 0xD3, 0xFB, 0x17, 0x39, 0x08, 0x86, 0xE5, 0x00,
+                ][..],
+                &[0x8D, 0x44, 0x7C, 0x94, 0x69, 0x04, 0xEA, 0x57, 0x91, 0x00][..],
+            ),
+            (
+                &[0x90, 0xCA, 0x00, 0x00, 0x05, 0x44, 0x44, 0x44, 0x0F, 0x0E, 0x00][..],
+                &[0x25, 0x5C, 0x36, 0x2D, 0x21, 0x49, 0xB2, 0x88, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        let session = desfire
+            .authenticate_2tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 16],
+                RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::TwoKey3Des(TwoKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xFB, 0x23, 0xED, 0x16, 0x01, 0x02, 0x03, 0x04, 0xFB, 0x23,
+                0xED, 0x16
+            ]))
+        );
+
+        desfire
+            .create_application(
+                ApplicationId::new(0x44_44_44).unwrap(),
+                KeySettings::new(0x0F, ApplicationKeyType::TwoKey3Des, 14),
+            )
+            .unwrap();
+
+        assert_eq!(desfire.executor().transport().index, 3);
+    }
+
+    #[test]
+    fn creates_3tdea_application_after_wrapped_3tdea_picc_auth_proxmark_trace() {
+        let transport = MockTransport::new([
+            (
+                &[0x90, 0x1A, 0x00, 0x00, 0x01, 0x00, 0x00][..],
+                &[
+                    0xC6, 0x8E, 0xC2, 0x29, 0x5D, 0xD9, 0x1B, 0xD0, 0x5B, 0x1D, 0xCE, 0xA8, 0x34,
+                    0x79, 0x61, 0x15, 0x91, 0xAF,
+                ][..],
+            ),
+            (
+                &[
+                    0x90, 0xAF, 0x00, 0x00, 0x20, 0xF0, 0x11, 0x33, 0xAB, 0x46, 0x2D, 0xFF, 0xD2,
+                    0x0F, 0xD1, 0xFD, 0x71, 0xAB, 0x52, 0xE6, 0x2C, 0x3E, 0xA4, 0x71, 0x5B, 0x22,
+                    0xEC, 0x10, 0x8E, 0x5B, 0x54, 0xB7, 0x4F, 0xA8, 0x2D, 0xCF, 0xF6, 0x00,
+                ][..],
+                &[
+                    0x4C, 0x95, 0x25, 0x20, 0xC5, 0x6A, 0x10, 0xF4, 0x3C, 0x4B, 0xC9, 0x2E, 0x88,
+                    0x97, 0x6A, 0x96, 0x91, 0x00,
+                ][..],
+            ),
+            (
+                &[0x90, 0xCA, 0x00, 0x00, 0x05, 0x55, 0x55, 0x55, 0x0F, 0x4E, 0x00][..],
+                &[0x75, 0xDF, 0xAA, 0xA4, 0x8E, 0xCA, 0x79, 0x2A, 0x91, 0x00][..],
+            ),
+        ]);
+        let mut desfire = Desfire::new(transport, WrappedFraming);
+
+        let session = desfire
+            .authenticate_3tdea_with_rnd_a(
+                KeyNumber::new(0).unwrap(),
+                &[0u8; 24],
+                RndA::new([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13,
+                    0x14, 0x15, 0x16,
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            session.session_key(),
+            SessionKey::ThreeKey3Des(ThreeKey3DesSessionKey::new([
+                0x01, 0x02, 0x03, 0x04, 0xE3, 0x63, 0x90, 0x66, 0x07, 0x08, 0x09, 0x10, 0xD2, 0xE8,
+                0x98, 0xDE, 0x13, 0x14, 0x15, 0x16, 0x49, 0xD8, 0xC0, 0x2A
+            ]))
+        );
+
+        desfire
+            .create_application(
+                ApplicationId::new(0x55_55_55).unwrap(),
+                KeySettings::new(0x0F, ApplicationKeyType::ThreeKey3Des, 14),
+            )
+            .unwrap();
+
+        assert_eq!(desfire.executor().transport().index, 3);
     }
 
     #[test]
