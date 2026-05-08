@@ -16,20 +16,17 @@ const ZERO_2TDEA_KEY: [u8; 16] = [0u8; 16];
 const ZERO_3TDEA_KEY: [u8; 24] = [0u8; 24];
 const ZERO_AES_KEY: [u8; 16] = [0u8; 16];
 const AES_KEY_1: [u8; 16] = [
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
-    0x1F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
 ];
 const TDEA2_KEY_1: [u8; 16] = [
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
-    0x1F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
 ];
 const TDEA3_KEY_1: [u8; 24] = [
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
-    0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
 ];
 const PICC_ROTATION_AES_KEY: [u8; 16] = [
-    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E,
-    0x2F,
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
 ];
 
 #[derive(Debug, Clone)]
@@ -135,7 +132,9 @@ pub fn run<T: Transport>(transport: T, args: IntegrationArgs) -> bool {
     };
 
     println!("=== DESFire Real-Tag Integration Test ===");
-    println!("Reader transport is live. This command talks to the real tag currently on the reader.");
+    println!(
+        "Reader transport is live. This command talks to the real tag currently on the reader."
+    );
 
     if runner.args.skip_format {
         runner.skip("FormatPICC", "--skip-format supplied");
@@ -149,9 +148,10 @@ pub fn run<T: Transport>(transport: T, args: IntegrationArgs) -> bool {
         });
     }
 
-    runner.step("Read tag version, PICC key settings, and free memory", |r| {
-        r.print_tag_info()
-    });
+    runner.step(
+        "Read tag version, PICC key settings, and free memory",
+        |r| r.print_tag_info(),
+    );
 
     runner.step("Rotate PICC key through 3TDEA and AES", |r| {
         // Authenticate with current PICC key (3TDEA zero), change to AES.
@@ -247,7 +247,12 @@ impl<T: Transport> Runner<T> {
 
         if !self.step("Create enciphered standard data file", |r| {
             r.desfire
-                .create_std_data_file(data_file(), CommunicationMode::Enciphered, key0_rights, FILE_SIZE)
+                .create_std_data_file(
+                    data_file(),
+                    CommunicationMode::Enciphered,
+                    key0_rights,
+                    FILE_SIZE,
+                )
                 .map_err(desfire_error)
         }) {
             self.cleanup_app(aid);
@@ -255,7 +260,10 @@ impl<T: Transport> Runner<T> {
         }
 
         self.step("GetFileSettings", |r| {
-            let settings = r.desfire.get_file_settings(data_file()).map_err(desfire_error)?;
+            let settings = r
+                .desfire
+                .get_file_settings(data_file())
+                .map_err(desfire_error)?;
             if settings.communication_mode() != CommunicationMode::Enciphered {
                 return Err(format!(
                     "unexpected communication mode: {:?}",
@@ -362,9 +370,7 @@ impl<T: Transport> Runner<T> {
     }
 
     fn select_app(&mut self, aid: ApplicationId) -> Result<(), String> {
-        self.desfire
-            .select_application(aid)
-            .map_err(desfire_error)
+        self.desfire.select_application(aid).map_err(desfire_error)
     }
 
     fn authenticate_picc(&mut self) -> Result<(), String> {
@@ -410,12 +416,7 @@ impl<T: Transport> Runner<T> {
     fn read_and_verify(&mut self, expected: &[u8; DATA_LEN]) -> Result<(), String> {
         let mut data: HeaplessVec<u8, 64> = HeaplessVec::new();
         self.desfire
-            .read_data_enciphered(
-                data_file(),
-                U24::new(0).unwrap(),
-                DATA_READ_LEN,
-                &mut data,
-            )
+            .read_data_enciphered(data_file(), U24::new(0).unwrap(), DATA_READ_LEN, &mut data)
             .map_err(desfire_error)?;
         if data.as_slice() != expected {
             return Err(format!(
