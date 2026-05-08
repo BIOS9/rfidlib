@@ -150,7 +150,7 @@ pub fn run<T: Transport>(transport: T, args: IntegrationArgs) -> bool {
 
     runner.step(
         "Read tag version, PICC key settings, and free memory",
-        |r| r.print_tag_info(),
+        Runner::print_tag_info,
     );
 
     runner.step("Rotate PICC key through 3TDEA and AES", |r| {
