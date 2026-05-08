@@ -260,9 +260,7 @@ fn parse_provision_args(args: &[String]) -> Result<ProvisionArgs, String> {
                 aid = Some(parse_aid(v)?);
             }
             "--picc-auth-aes" => {
-                let v = iter
-                    .next()
-                    .ok_or("--picc-auth-aes requires <n>:<32_hex>")?;
+                let v = iter.next().ok_or("--picc-auth-aes requires <n>:<32_hex>")?;
                 picc_auth = Some(parse_aes_auth_spec(v)?);
             }
             other => return Err(format!("unknown option: {other}")),
@@ -286,19 +284,13 @@ fn parse_delete_args(args: &[String]) -> Result<DeleteArgs, String> {
                 aid = Some(parse_aid(v)?);
             }
             "--auth-aes" => {
-                let v = iter
-                    .next()
-                    .ok_or("--auth-aes requires <n>:<32_hex>")?;
+                let v = iter.next().ok_or("--auth-aes requires <n>:<32_hex>")?;
                 auth = Some(parse_aes_auth_spec(v)?);
             }
             "--file" => {
                 let v = iter.next().ok_or("--file requires an id (0-31)")?;
-                let raw: u8 = v
-                    .parse()
-                    .map_err(|e| format!("--file invalid id: {e}"))?;
-                files.push(
-                    FileId::new(raw).map_err(|e| format!("--file out of range: {e:?}"))?,
-                );
+                let raw: u8 = v.parse().map_err(|e| format!("--file invalid id: {e}"))?;
+                files.push(FileId::new(raw).map_err(|e| format!("--file out of range: {e:?}"))?);
             }
             other => return Err(format!("unknown option: {other}")),
         }
@@ -425,16 +417,17 @@ fn parse_change_key_args(args: &[String]) -> Result<ChangeKeyArgs, String> {
                 let v = iter.next().ok_or("--newkeyno requires a number 0-13")?;
                 let raw: u8 = v.parse().map_err(|e| format!("--newkeyno: {e}"))?;
                 new_key_number = Some(
-                    KeyNumber::new(raw)
-                        .map_err(|e| format!("--newkeyno out of range: {e:?}"))?,
+                    KeyNumber::new(raw).map_err(|e| format!("--newkeyno out of range: {e:?}"))?,
                 );
             }
             "--newkey" => {
                 let v = iter.next().ok_or("--newkey requires 32 hex chars")?;
-                let bytes = parse_hex(v)
-                    .ok_or_else(|| format!("--newkey invalid hex: {v}"))?;
+                let bytes = parse_hex(v).ok_or_else(|| format!("--newkey invalid hex: {v}"))?;
                 new_key = Some(bytes.as_slice().try_into().map_err(|_| {
-                    format!("--newkey must be 16 bytes (32 hex chars), got {}", bytes.len())
+                    format!(
+                        "--newkey must be 16 bytes (32 hex chars), got {}",
+                        bytes.len()
+                    )
                 })?);
             }
             "--newver" => {
@@ -443,10 +436,12 @@ fn parse_change_key_args(args: &[String]) -> Result<ChangeKeyArgs, String> {
             }
             "--oldkey" => {
                 let v = iter.next().ok_or("--oldkey requires 32 hex chars")?;
-                let bytes = parse_hex(v)
-                    .ok_or_else(|| format!("--oldkey invalid hex: {v}"))?;
+                let bytes = parse_hex(v).ok_or_else(|| format!("--oldkey invalid hex: {v}"))?;
                 old_key = Some(bytes.as_slice().try_into().map_err(|_| {
-                    format!("--oldkey must be 16 bytes (32 hex chars), got {}", bytes.len())
+                    format!(
+                        "--oldkey must be 16 bytes (32 hex chars), got {}",
+                        bytes.len()
+                    )
                 })?);
             }
             other => return Err(format!("unknown option: {other}")),
@@ -519,9 +514,18 @@ fn change_key_desfire<T: Transport>(transport: T, args: &ChangeKeyArgs) {
             "  Changing key {} (version 0x{:02X}){}...",
             args.new_key_number.as_byte(),
             args.new_key_version,
-            if same_key { " [same key as auth — session will be cleared]" } else { "" },
+            if same_key {
+                " [same key as auth — session will be cleared]"
+            } else {
+                ""
+            },
         );
-        desfire.change_key_aes(args.new_key_number, args.new_key, args.new_key_version, args.old_key)
+        desfire.change_key_aes(
+            args.new_key_number,
+            args.new_key,
+            args.new_key_version,
+            args.old_key,
+        )
     };
 
     match result {
@@ -616,7 +620,11 @@ fn provision_desfire<T: Transport>(transport: T, args: &ProvisionArgs) {
     for (id, mode, label) in [
         (0u8, CommunicationMode::Plain, "standard data, plain, 32 B"),
         (1u8, CommunicationMode::Maced, "standard data, MACed, 32 B"),
-        (2u8, CommunicationMode::Enciphered, "standard data, enciphered, 32 B"),
+        (
+            2u8,
+            CommunicationMode::Enciphered,
+            "standard data, enciphered, 32 B",
+        ),
     ] {
         let fid = FileId::new(id).unwrap();
         match desfire.create_std_data_file(fid, mode, access, size32) {

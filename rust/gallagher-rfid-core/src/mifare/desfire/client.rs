@@ -178,7 +178,13 @@ where
             Session::Authenticated(s) => key_number == s.key_number(),
             Session::Unauthenticated => return Err(Error::MissingAuthentication),
         };
-        self.change_key_aes_impl(key_number.as_byte(), new_key, key_version, old_key, changing_auth_key)
+        self.change_key_aes_impl(
+            key_number.as_byte(),
+            new_key,
+            key_version,
+            old_key,
+            changing_auth_key,
+        )
     }
 
     /// Changes the PICC master key (app 0x000000 must be selected).
@@ -186,11 +192,7 @@ where
     /// The `KeyNo` byte for a PICC-level AES key encodes the algorithm (`0x80`) rather than a
     /// slot number. Callers must authenticate with the current PICC master key before calling
     /// this; the card invalidates the session on success.
-    pub fn change_picc_key_aes(
-        &mut self,
-        new_key: [u8; 16],
-        key_version: u8,
-    ) -> Result<(), Error> {
+    pub fn change_picc_key_aes(&mut self, new_key: [u8; 16], key_version: u8) -> Result<(), Error> {
         // 0x80 = AES algorithm flag for PICC-level key change; always same-key case.
         self.change_key_aes_impl(0x80, new_key, key_version, None, true)
     }
@@ -392,8 +394,7 @@ where
 
     /// Deletes an application and all its files.
     pub fn delete_application(&mut self, application_id: ApplicationId) -> Result<(), Error> {
-        let command =
-            Command::new(CommandCode::DELETE_APPLICATION, &application_id.as_bytes())?;
+        let command = Command::new(CommandCode::DELETE_APPLICATION, &application_id.as_bytes())?;
         self.execute_management_command(&command)
     }
 
@@ -735,13 +736,27 @@ where
     ) -> Result<(), Error> {
         let ar = access_rights.to_bytes();
         let mut payload: Vec<u8, 17> = Vec::new();
-        payload.push(file_id.as_byte()).map_err(|_| Error::CommandTooLong)?;
-        payload.push(u8::from(communication_mode)).map_err(|_| Error::CommandTooLong)?;
-        payload.extend_from_slice(&ar).map_err(|_| Error::CommandTooLong)?;
-        payload.extend_from_slice(&lower_limit.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
-        payload.extend_from_slice(&upper_limit.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
-        payload.extend_from_slice(&initial_value.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
-        payload.push(u8::from(limited_credit_enabled)).map_err(|_| Error::CommandTooLong)?;
+        payload
+            .push(file_id.as_byte())
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .push(u8::from(communication_mode))
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .extend_from_slice(&ar)
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .extend_from_slice(&lower_limit.to_le_bytes())
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .extend_from_slice(&upper_limit.to_le_bytes())
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .extend_from_slice(&initial_value.to_le_bytes())
+            .map_err(|_| Error::CommandTooLong)?;
+        payload
+            .push(u8::from(limited_credit_enabled))
+            .map_err(|_| Error::CommandTooLong)?;
         let command = Command::new(CommandCode::CREATE_VALUE_FILE, payload.as_slice())?;
         self.execute_management_command(&command)
     }
@@ -755,8 +770,13 @@ where
         record_size: U24,
         max_records: U24,
     ) -> Result<(), Error> {
-        let payload =
-            create_record_file_payload(file_id, communication_mode, access_rights, record_size, max_records)?;
+        let payload = create_record_file_payload(
+            file_id,
+            communication_mode,
+            access_rights,
+            record_size,
+            max_records,
+        )?;
         let command = Command::new(CommandCode::CREATE_LINEAR_RECORD_FILE, payload.as_slice())?;
         self.execute_management_command(&command)
     }
@@ -770,8 +790,13 @@ where
         record_size: U24,
         max_records: U24,
     ) -> Result<(), Error> {
-        let payload =
-            create_record_file_payload(file_id, communication_mode, access_rights, record_size, max_records)?;
+        let payload = create_record_file_payload(
+            file_id,
+            communication_mode,
+            access_rights,
+            record_size,
+            max_records,
+        )?;
         let command = Command::new(CommandCode::CREATE_CYCLIC_RECORD_FILE, payload.as_slice())?;
         self.execute_management_command(&command)
     }
@@ -839,10 +864,18 @@ fn create_data_file_payload(
 ) -> Result<Vec<u8, 7>, Error> {
     let ar = access_rights.to_bytes();
     let mut payload: Vec<u8, 7> = Vec::new();
-    payload.push(file_id.as_byte()).map_err(|_| Error::CommandTooLong)?;
-    payload.push(u8::from(communication_mode)).map_err(|_| Error::CommandTooLong)?;
-    payload.extend_from_slice(&ar).map_err(|_| Error::CommandTooLong)?;
-    payload.extend_from_slice(&size.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
+    payload
+        .push(file_id.as_byte())
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .push(u8::from(communication_mode))
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .extend_from_slice(&ar)
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .extend_from_slice(&size.to_le_bytes())
+        .map_err(|_| Error::CommandTooLong)?;
     Ok(payload)
 }
 
@@ -855,11 +888,21 @@ fn create_record_file_payload(
 ) -> Result<Vec<u8, 10>, Error> {
     let ar = access_rights.to_bytes();
     let mut payload: Vec<u8, 10> = Vec::new();
-    payload.push(file_id.as_byte()).map_err(|_| Error::CommandTooLong)?;
-    payload.push(u8::from(communication_mode)).map_err(|_| Error::CommandTooLong)?;
-    payload.extend_from_slice(&ar).map_err(|_| Error::CommandTooLong)?;
-    payload.extend_from_slice(&record_size.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
-    payload.extend_from_slice(&max_records.to_le_bytes()).map_err(|_| Error::CommandTooLong)?;
+    payload
+        .push(file_id.as_byte())
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .push(u8::from(communication_mode))
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .extend_from_slice(&ar)
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .extend_from_slice(&record_size.to_le_bytes())
+        .map_err(|_| Error::CommandTooLong)?;
+    payload
+        .extend_from_slice(&max_records.to_le_bytes())
+        .map_err(|_| Error::CommandTooLong)?;
     Ok(payload)
 }
 
@@ -2199,10 +2242,8 @@ mod tests {
     // RX: 91 00  (wrapped; native: 00)  — no MAC when unauthenticated
     #[test]
     fn creates_application_unauthenticated() {
-        let transport = MockTransport::new([(
-            &[0xCA, 0x22, 0x22, 0x22, 0x0F, 0x81][..],
-            &[0x00][..],
-        )]);
+        let transport =
+            MockTransport::new([(&[0xCA, 0x22, 0x22, 0x22, 0x0F, 0x81][..], &[0x00][..])]);
         let mut desfire = Desfire::new(transport, NativeFraming);
 
         let aid = crate::mifare::desfire::ApplicationId::new(0x22_22_22).unwrap();
