@@ -277,7 +277,7 @@ where
 
         // Zero-pad to block boundary.
         let block_size = session.block_size();
-        while plaintext.len() % block_size != 0 {
+        while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
 
@@ -462,7 +462,7 @@ where
         plaintext
             .extend_from_slice(&crc)
             .map_err(|_| Error::CommandTooLong)?;
-        while plaintext.len() % block_size != 0 {
+        while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
 
@@ -670,7 +670,7 @@ where
         plaintext
             .extend_from_slice(&crc)
             .map_err(|_| Error::CommandTooLong)?;
-        while plaintext.len() % block_size != 0 {
+        while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
 
@@ -724,6 +724,7 @@ where
     }
 
     /// Creates a value file in the selected application.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_value_file(
         &mut self,
         file_id: FileId,
@@ -911,7 +912,10 @@ fn write_data_command_header(
     offset: U24,
     data: &[u8],
 ) -> Result<Vec<u8, 7>, Error> {
-    let length = U24::new(data.len() as u32).ok_or(Error::CommandTooLong)?;
+    let length = u32::try_from(data.len())
+        .ok()
+        .and_then(U24::new)
+        .ok_or(Error::CommandTooLong)?;
     read_data_command_data(file_id, offset, length)
 }
 
