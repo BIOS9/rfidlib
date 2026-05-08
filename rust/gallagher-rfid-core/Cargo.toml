@@ -12,4 +12,5 @@ std = []
 
 [dependencies]
 aes = { workspace = true }
+des = { workspace = true }
 heapless = { workspace = true }

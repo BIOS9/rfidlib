@@ -8,6 +8,7 @@ members = [
 
 [workspace.dependencies]
 aes = "0.8.4"
+des = "0.8.1"
 heapless = "0.9.3"
 pcsc = "2.9.0"
 

@@ -15,6 +15,8 @@ pub struct CommandCode(u8);
 impl CommandCode {
     pub const ADDITIONAL_FRAME: Self = Self(0xAF);
     pub const AUTHENTICATE_AES: Self = Self(0xAA);
+    pub const AUTHENTICATE_ISO: Self = Self(0x1A);
+    pub const AUTHENTICATE_LEGACY: Self = Self(0x0A);
     pub const GET_KEY_SETTINGS: Self = Self(0x45);
     pub const GET_KEY_VERSION: Self = Self(0x64);
     pub const GET_VERSION: Self = Self(0x60);
