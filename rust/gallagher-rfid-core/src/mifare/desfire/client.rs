@@ -637,7 +637,11 @@ where
         plaintext
             .extend_from_slice(&new_settings)
             .map_err(|_| Error::CommandTooLong)?;
-        extend_desfire_crc(&mut plaintext, crc_input.as_slice(), session.crc_size())?;
+        extend_desfire_crc(
+            &mut plaintext,
+            crc_input.as_slice(),
+            session.encrypted_command_crc_size(),
+        )?;
         while !plaintext.len().is_multiple_of(block_size) {
             plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
         }
@@ -836,7 +840,7 @@ where
         crc_input
             .extend_from_slice(data)
             .map_err(|_| Error::CommandTooLong)?;
-        let crc_size = session.crc_size();
+        let crc_size = session.encrypted_command_crc_size();
 
         let block_size = session.block_size();
         let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();

@@ -133,13 +133,23 @@ impl AuthenticatedSession {
         }
     }
 
-    /// CRC size in bytes appended inside encrypted payloads.
+    /// CRC size in bytes appended inside legacy encrypted payloads.
     ///
     /// DES and two-key 3DES use a 2-byte CRC16; three-key 3DES and AES use a 4-byte CRC32.
     pub const fn crc_size(&self) -> usize {
         match self.state {
             AlgoState::Aes(_) | AlgoState::ThreeKey3Des(_) => 4,
             AlgoState::Des(_) | AlgoState::TwoKey3Des(_) => 2,
+        }
+    }
+
+    /// CRC size in bytes used by encrypted command plaintexts.
+    ///
+    /// EV1 secure messaging uses a CRC32 trailer for 2TDEA encrypted commands.
+    pub const fn encrypted_command_crc_size(&self) -> usize {
+        match self.state {
+            AlgoState::Aes(_) | AlgoState::TwoKey3Des(_) | AlgoState::ThreeKey3Des(_) => 4,
+            AlgoState::Des(_) => 2,
         }
     }
 
@@ -434,21 +444,25 @@ mod tests {
         let aes = AuthenticatedSession::new_aes(kn, AesSessionKey::new([0; 16]));
         assert_eq!(aes.block_size(), 16);
         assert_eq!(aes.crc_size(), 4);
+        assert_eq!(aes.encrypted_command_crc_size(), 4);
         assert_eq!(aes.encrypted_read_crc_size(), 4);
 
         let des = AuthenticatedSession::new_des(kn, DesSessionKey::new([0; 8]));
         assert_eq!(des.block_size(), 8);
         assert_eq!(des.crc_size(), 2);
+        assert_eq!(des.encrypted_command_crc_size(), 2);
         assert_eq!(des.encrypted_read_crc_size(), 2);
 
         let tdea2 = AuthenticatedSession::new_2tdea(kn, TwoKey3DesSessionKey::new([0; 16]));
         assert_eq!(tdea2.block_size(), 8);
         assert_eq!(tdea2.crc_size(), 2);
+        assert_eq!(tdea2.encrypted_command_crc_size(), 4);
         assert_eq!(tdea2.encrypted_read_crc_size(), 4);
 
         let tdea3 = AuthenticatedSession::new_3tdea(kn, ThreeKey3DesSessionKey::new([0; 24]));
         assert_eq!(tdea3.block_size(), 8);
         assert_eq!(tdea3.crc_size(), 4);
+        assert_eq!(tdea3.encrypted_command_crc_size(), 4);
         assert_eq!(tdea3.encrypted_read_crc_size(), 4);
     }
 
