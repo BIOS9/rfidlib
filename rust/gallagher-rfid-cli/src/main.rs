@@ -151,6 +151,21 @@ fn main() {
             };
             provision_desfire(card, &provision_args);
         }
+        "desfire-changekey" => {
+            let ck_args = match parse_change_key_args(&args[2..]) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("desfire-changekey: {error}");
+                    eprintln!(
+                        "Usage: {} desfire-changekey [--aid <hex>] --auth-aes <n>:<32hex> \
+                         (--picc | --newkeyno <n>) --newkey <32hex> [--newver <v>] [--oldkey <32hex>]",
+                        args[0]
+                    );
+                    std::process::exit(1);
+                }
+            };
+            change_key_desfire(card, &ck_args);
+        }
         "desfire-delete" => {
             let delete_args = match parse_delete_args(&args[2..]) {
                 Ok(parsed) => parsed,
@@ -166,7 +181,7 @@ fn main() {
             delete_desfire(card, &delete_args);
         }
         _ => {
-            eprintln!("Usage: {} [read|write|desfire|desfire-format|desfire-provision|desfire-delete]", args[0]);
+            eprintln!("Usage: {} [read|write|desfire|desfire-format|desfire-provision|desfire-delete|desfire-changekey]", args[0]);
             std::process::exit(1);
         }
     }
@@ -372,6 +387,147 @@ fn parse_optional_aes_auth(args: &[String]) -> Result<Option<AesAuthSpec>, Strin
         }
     }
     Ok(auth)
+}
+
+struct ChangeKeyArgs {
+    aid: ApplicationId,
+    auth: AesAuthSpec,
+    picc: bool,
+    new_key_number: KeyNumber,
+    new_key: [u8; 16],
+    new_key_version: u8,
+    old_key: Option<[u8; 16]>,
+}
+
+fn parse_change_key_args(args: &[String]) -> Result<ChangeKeyArgs, String> {
+    let mut aid: Option<ApplicationId> = None;
+    let mut auth: Option<AesAuthSpec> = None;
+    let mut picc = false;
+    let mut new_key_number: Option<KeyNumber> = None;
+    let mut new_key: Option<[u8; 16]> = None;
+    let mut new_key_version: u8 = 0;
+    let mut old_key: Option<[u8; 16]> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--aid" => {
+                let v = iter.next().ok_or("--aid requires a hex value")?;
+                aid = Some(parse_aid(v)?);
+            }
+            "--auth-aes" => {
+                let v = iter.next().ok_or("--auth-aes requires <n>:<32hex>")?;
+                auth = Some(parse_aes_auth_spec(v)?);
+            }
+            "--picc" => {
+                picc = true;
+            }
+            "--newkeyno" => {
+                let v = iter.next().ok_or("--newkeyno requires a number 0-13")?;
+                let raw: u8 = v.parse().map_err(|e| format!("--newkeyno: {e}"))?;
+                new_key_number = Some(
+                    KeyNumber::new(raw)
+                        .map_err(|e| format!("--newkeyno out of range: {e:?}"))?,
+                );
+            }
+            "--newkey" => {
+                let v = iter.next().ok_or("--newkey requires 32 hex chars")?;
+                let bytes = parse_hex(v)
+                    .ok_or_else(|| format!("--newkey invalid hex: {v}"))?;
+                new_key = Some(bytes.as_slice().try_into().map_err(|_| {
+                    format!("--newkey must be 16 bytes (32 hex chars), got {}", bytes.len())
+                })?);
+            }
+            "--newver" => {
+                let v = iter.next().ok_or("--newver requires a number 0-255")?;
+                new_key_version = v.parse().map_err(|e| format!("--newver: {e}"))?;
+            }
+            "--oldkey" => {
+                let v = iter.next().ok_or("--oldkey requires 32 hex chars")?;
+                let bytes = parse_hex(v)
+                    .ok_or_else(|| format!("--oldkey invalid hex: {v}"))?;
+                old_key = Some(bytes.as_slice().try_into().map_err(|_| {
+                    format!("--oldkey must be 16 bytes (32 hex chars), got {}", bytes.len())
+                })?);
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+    if picc && new_key_number.is_some() {
+        return Err("--picc and --newkeyno are mutually exclusive".to_string());
+    }
+    if !picc && new_key_number.is_none() {
+        return Err("one of --picc or --newkeyno is required".to_string());
+    }
+    let resolved_aid = if picc {
+        aid.unwrap_or(ApplicationId::PICC)
+    } else {
+        aid.ok_or("--aid is required for app-level key change")?
+    };
+    Ok(ChangeKeyArgs {
+        aid: resolved_aid,
+        auth: auth.ok_or("--auth-aes is required")?,
+        picc,
+        new_key_number: new_key_number.unwrap_or(KeyNumber::new(0).unwrap()),
+        new_key: new_key.ok_or("--newkey is required")?,
+        new_key_version,
+        old_key,
+    })
+}
+
+fn change_key_desfire<T: Transport>(transport: T, args: &ChangeKeyArgs) {
+    let mut desfire = Desfire::new(transport, WrappedFraming);
+    if let Err(e) = desfire.select_application(args.aid) {
+        eprintln!("  SelectApplication failed: {e:?}");
+        return;
+    }
+
+    let rnd_a = match random_rnd_a() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  /dev/urandom: {e}");
+            return;
+        }
+    };
+    match desfire.authenticate_aes_with_rnd_a(args.auth.key_number, &args.auth.key, rnd_a) {
+        Ok(session) => println!(
+            "  Authenticated as key {} (session key: {:02X?}).",
+            args.auth.key_number.as_byte(),
+            session.session_key()
+        ),
+        Err(e) => {
+            eprintln!("  Auth failed: {e:?}");
+            return;
+        }
+    }
+
+    let result = if args.picc {
+        println!(
+            "  Changing PICC master key (version 0x{:02X}) [session will be cleared]...",
+            args.new_key_version
+        );
+        desfire.change_picc_key_aes(args.new_key, args.new_key_version)
+    } else {
+        let same_key = args.new_key_number == args.auth.key_number;
+        if !same_key && args.old_key.is_none() {
+            eprintln!(
+                "  Changing key {} requires --oldkey (current value of that slot).",
+                args.new_key_number.as_byte()
+            );
+            return;
+        }
+        println!(
+            "  Changing key {} (version 0x{:02X}){}...",
+            args.new_key_number.as_byte(),
+            args.new_key_version,
+            if same_key { " [same key as auth — session will be cleared]" } else { "" },
+        );
+        desfire.change_key_aes(args.new_key_number, args.new_key, args.new_key_version, args.old_key)
+    };
+
+    match result {
+        Ok(()) => println!("  Key changed successfully."),
+        Err(e) => eprintln!("  ChangeKey failed: {e:?}"),
+    }
 }
 
 fn format_desfire<T: Transport>(transport: T, auth: Option<AesAuthSpec>) {

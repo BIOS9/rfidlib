@@ -41,4 +41,6 @@ pub enum Error {
     Transport,
     /// The operation requires a cryptographic algorithm that is not yet implemented.
     UnsupportedAlgorithm,
+    /// `ChangeKey` for a key other than the session key requires the old key value.
+    MissingOldKey,
 }

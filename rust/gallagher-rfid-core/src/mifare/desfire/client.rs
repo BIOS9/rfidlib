@@ -158,6 +158,156 @@ where
         data.first().copied().ok_or(Error::InvalidResponseLength)
     }
 
+    /// Changes a key in the currently selected application.
+    ///
+    /// `key_version` is the AES key version byte stored alongside the key on the card.
+    ///
+    /// When changing the key that was used for authentication, the card invalidates the
+    /// session on success and the client returns to unauthenticated state.
+    ///
+    /// When changing a different key, `old_key` must be the current value of that key slot.
+    /// The card returns an 8-byte response MAC and the session remains active.
+    pub fn change_key_aes(
+        &mut self,
+        key_number: KeyNumber,
+        new_key: [u8; 16],
+        key_version: u8,
+        old_key: Option<[u8; 16]>,
+    ) -> Result<(), Error> {
+        let changing_auth_key = match self.session {
+            Session::Authenticated(s) => key_number == s.key_number(),
+            Session::Unauthenticated => return Err(Error::MissingAuthentication),
+        };
+        self.change_key_aes_impl(key_number.as_byte(), new_key, key_version, old_key, changing_auth_key)
+    }
+
+    /// Changes the PICC master key (app 0x000000 must be selected).
+    ///
+    /// The `KeyNo` byte for a PICC-level AES key encodes the algorithm (`0x80`) rather than a
+    /// slot number. Callers must authenticate with the current PICC master key before calling
+    /// this; the card invalidates the session on success.
+    pub fn change_picc_key_aes(
+        &mut self,
+        new_key: [u8; 16],
+        key_version: u8,
+    ) -> Result<(), Error> {
+        // 0x80 = AES algorithm flag for PICC-level key change; always same-key case.
+        self.change_key_aes_impl(0x80, new_key, key_version, None, true)
+    }
+
+    fn change_key_aes_impl(
+        &mut self,
+        key_no_byte: u8,
+        new_key: [u8; 16],
+        key_version: u8,
+        old_key: Option<[u8; 16]>,
+        changing_auth_key: bool,
+    ) -> Result<(), Error> {
+        let Session::Authenticated(mut session) = self.session else {
+            return Err(Error::MissingAuthentication);
+        };
+
+        let mut plaintext: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+
+        if changing_auth_key {
+            // CRC32 over [cmd_code || key_no || new_key || key_version].
+            let mut crc_input: Vec<u8, 19> = Vec::new();
+            crc_input
+                .push(CommandCode::CHANGE_KEY.as_byte())
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input
+                .push(key_no_byte)
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input
+                .extend_from_slice(&new_key)
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input
+                .push(key_version)
+                .map_err(|_| Error::CommandTooLong)?;
+            let crc = desfire_crc32(crc_input.as_slice());
+
+            // Plaintext: [new_key || key_version || CRC32 || zero_padding].
+            plaintext
+                .extend_from_slice(&new_key)
+                .map_err(|_| Error::CommandTooLong)?;
+            plaintext
+                .push(key_version)
+                .map_err(|_| Error::CommandTooLong)?;
+            plaintext
+                .extend_from_slice(&crc)
+                .map_err(|_| Error::CommandTooLong)?;
+        } else {
+            let old = old_key.ok_or(Error::MissingOldKey)?;
+            let key_xor: [u8; 16] = core::array::from_fn(|i| new_key[i] ^ old[i]);
+
+            // CRC32_a over [cmd_code || key_no || (new_key XOR old_key) || key_version].
+            // CRC32_b over [new_key] only (no version byte).
+            let mut crc_input_a: Vec<u8, 19> = Vec::new();
+            crc_input_a
+                .push(CommandCode::CHANGE_KEY.as_byte())
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input_a
+                .push(key_no_byte)
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input_a
+                .extend_from_slice(&key_xor)
+                .map_err(|_| Error::CommandTooLong)?;
+            crc_input_a
+                .push(key_version)
+                .map_err(|_| Error::CommandTooLong)?;
+            let crc_a = desfire_crc32(crc_input_a.as_slice());
+            let crc_b = desfire_crc32(&new_key);
+
+            // Plaintext: [(new_key XOR old_key) || key_version || CRC32_a || CRC32_b || zero_padding].
+            plaintext
+                .extend_from_slice(&key_xor)
+                .map_err(|_| Error::CommandTooLong)?;
+            plaintext
+                .push(key_version)
+                .map_err(|_| Error::CommandTooLong)?;
+            plaintext
+                .extend_from_slice(&crc_a)
+                .map_err(|_| Error::CommandTooLong)?;
+            plaintext
+                .extend_from_slice(&crc_b)
+                .map_err(|_| Error::CommandTooLong)?;
+        }
+
+        // Zero-pad to block boundary.
+        let block_size = session.block_size();
+        while plaintext.len() % block_size != 0 {
+            plaintext.push(0x00).map_err(|_| Error::CommandTooLong)?;
+        }
+
+        // Encrypt using current chaining IV; chaining advances to last ciphertext block.
+        session.cbc_encrypt_in_place(plaintext.as_mut_slice())?;
+
+        let mut cmd_data: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+        cmd_data
+            .push(key_no_byte)
+            .map_err(|_| Error::CommandTooLong)?;
+        cmd_data
+            .extend_from_slice(plaintext.as_slice())
+            .map_err(|_| Error::CommandTooLong)?;
+        let command = Command::new(CommandCode::CHANGE_KEY, cmd_data.as_slice())?;
+
+        let response = self.executor.exchange_one(&command)?;
+        if response.status() != Status::OperationOk {
+            return Err(Error::Status(response.status()));
+        }
+
+        if changing_auth_key {
+            // Card invalidates the session after changing the authenticated key.
+            self.session = Session::Unauthenticated;
+        } else {
+            // Response carries 8-byte MAC over empty body.
+            verify_response_mac(&mut session, Status::OperationOk, response.data())?;
+            self.session = Session::Authenticated(session);
+        }
+
+        Ok(())
+    }
+
     /// Reads available free memory, when supported by the card.
     pub fn free_memory(&mut self) -> Result<U24, Error> {
         let command = Command::new(CommandCode::FREE_MEM, &[])?;
