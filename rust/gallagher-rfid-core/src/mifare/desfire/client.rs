@@ -1093,11 +1093,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "std")]
     struct DynMockTransport {
         exchanges: std::vec::Vec<(std::vec::Vec<u8>, std::vec::Vec<u8>)>,
         index: usize,
     }
 
+    #[cfg(feature = "std")]
     impl DynMockTransport {
         fn new(exchanges: std::vec::Vec<(std::vec::Vec<u8>, std::vec::Vec<u8>)>) -> Self {
             Self {
@@ -1107,6 +1109,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "std")]
     impl Transport for DynMockTransport {
         fn transceive(&mut self, tx: &[u8], rx: &mut Frame) -> Result<(), Error> {
             let (expected_tx, response) = &self.exchanges[self.index];
@@ -1475,6 +1478,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn reads_maced_data() {
         // Auth from EV2 proxmark trace (key=00..00), session key 01 02 03 04 7C B5 EA 83 ...
@@ -1566,6 +1570,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn reads_maced_data_rejects_bad_mac() {
         use crate::mifare::desfire::crypto::{AesCmacChaining, AesSessionKey};
