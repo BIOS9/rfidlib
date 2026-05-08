@@ -476,6 +476,165 @@ mod tests {
         );
     }
 
+    // Proxmark trace: `hf mfdes changekey --aid 111111 --keyno 0 --algo aes
+    //   --newkey 01020304050607080102030405060708 --newkeyno 0 --newalgo aes --verbose --apdu`
+    // Session key: 01 02 03 04 03 95 69 17 13 14 15 16 06 EF 0E 66
+    // No prior commands in session (chaining IV = all zeros at start of ChangeKey).
+    // Command: 90 C4 00 00 21 00 30 3A D0 44 37 12 04 17 A1 73 00 80 96 D8 93 57 D9 92
+    //                         36 A2 55 22 BF A7 7F F2 ED C2 51 66 66 EA 00
+    //   key_no=0x00, encrypted=30 3A D0 44 37 12 04 17 A1 73 00 80 96 D8 93 57
+    //                          D9 92 36 A2 55 22 BF A7 7F F2 ED C2 51 66 66 EA  (32 bytes)
+    // Response: 91 00  (status OK only — session invalidated, no MAC)
+    // Proxmark trace: `hf mfdes changekey --aid 111111 --keyno 0 --algo aes
+    //   -k 01020304050607080102030405060708 --newkey 01020304050607080102030405060708
+    //   --newkeyno 1 --newalgo aes --newver 01 --verbose --apdu`
+    // Auth key 0 = 01..08 01..08; changing key 1 (old=all zeros, new=01..08 01..08, version=0x01)
+    // Session key: 01 02 03 04 82 33 20 14 13 14 15 16 DA 96 DD 27
+    // Command: 90 C4 00 00 21 01 FC 62 97 E0 29 ED 81 BA CD 1A 51 A2 6B 14 0E 37 26 5B 6D
+    //                         0A 58 F0 FD 45 9A 13 CE 06 ED B8 F9 AC 00
+    //   key_no=0x01, encrypted=FC..AC (32 bytes)
+    // Response: C2 BA 20 0C 58 27 F6 93 91 00  (8-byte MAC + status OK)
+    // Plaintext (decrypted): [key_xor(16) || version(0x01) || CRC32_a(4) || CRC32_b(4) || zeros(7)]
+    //   CRC32_a: CRC32(cmd || key_no || key_xor || version) = 2F C6 C0 9C
+    //   CRC32_b: CRC32(new_key) = 79 88 88 DA
+    #[test]
+    fn change_key_different_key_crypto_chain() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x82, 0x33, 0x20, 0x14, 0x13, 0x14, 0x15, 0x16, 0xDA, 0x96,
+            0xDD, 0x27,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        let new_key: [u8; 16] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08,
+        ];
+        let old_key = [0u8; 16];
+        let key_xor: [u8; 16] = core::array::from_fn(|i| new_key[i] ^ old_key[i]);
+        let key_version: u8 = 0x01;
+
+        let crc_a = desfire_crc32(&{
+            let mut v = [0u8; 19];
+            v[0] = CommandCode::CHANGE_KEY.as_byte();
+            v[1] = 0x01; // key_no
+            v[2..18].copy_from_slice(&key_xor);
+            v[18] = key_version;
+            v
+        });
+        let crc_b = desfire_crc32(&new_key);
+
+        let mut plaintext = [0u8; 32];
+        plaintext[..16].copy_from_slice(&key_xor);
+        plaintext[16] = key_version;
+        plaintext[17..21].copy_from_slice(&crc_a);
+        plaintext[21..25].copy_from_slice(&crc_b);
+        // bytes 25..32 zero-padded
+
+        session.cbc_encrypt_in_place(&mut plaintext).unwrap();
+        assert_eq!(
+            plaintext,
+            [
+                0xFC, 0x62, 0x97, 0xE0, 0x29, 0xED, 0x81, 0xBA, 0xCD, 0x1A, 0x51, 0xA2, 0x6B,
+                0x14, 0x0E, 0x37, 0x26, 0x5B, 0x6D, 0x0A, 0x58, 0xF0, 0xFD, 0x45, 0x9A, 0x13,
+                0xCE, 0x06, 0xED, 0xB8, 0xF9, 0xAC
+            ]
+        );
+
+        // After encryption chaining = last ciphertext block; response MAC verifies chain.
+        let mac = session
+            .update_response_cmac(Status::OperationOk, &[])
+            .unwrap();
+        assert_eq!(
+            mac.as_bytes(),
+            [0xC2, 0xBA, 0x20, 0x0C, 0x58, 0x27, 0xF6, 0x93]
+        );
+    }
+
+    // Proxmark trace: `hf mfdes changekey --keyno 0 --algo aes
+    //   --newkey 01020304050607080102030405060708 --newkeyno 0 --newalgo aes --newver 02`
+    // PICC level (AID 000000). KeyNo byte = 0x80 (AES flag).
+    // Session key: 01 02 03 04 0B 5D FE 1D 13 14 15 16 4C 6B C1 B3
+    // Command data: 80 51 7B 64 96 3A CB 65 FB A3 FA 63 87 43 CE 9C F2 3F F7 F4
+    //               99 7C 0B 70 14 1D 00 CF 07 09 E2 5E 29
+    #[test]
+    fn change_picc_key_crypto() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x0B, 0x5D, 0xFE, 0x1D, 0x13, 0x14, 0x15, 0x16, 0x4C, 0x6B,
+            0xC1, 0xB3,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+        let new_key: [u8; 16] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08,
+        ];
+        let key_version: u8 = 0x02;
+        let key_no_byte: u8 = 0x80;
+        let crc = desfire_crc32(&{
+            let mut v = [0u8; 19];
+            v[0] = CommandCode::CHANGE_KEY.as_byte();
+            v[1] = key_no_byte;
+            v[2..18].copy_from_slice(&new_key);
+            v[18] = key_version;
+            v
+        });
+        let mut plaintext = [0u8; 32];
+        plaintext[..16].copy_from_slice(&new_key);
+        plaintext[16] = key_version;
+        plaintext[17..21].copy_from_slice(&crc);
+        session.cbc_encrypt_in_place(&mut plaintext).unwrap();
+        assert_eq!(
+            plaintext,
+            [
+                0x51, 0x7B, 0x64, 0x96, 0x3A, 0xCB, 0x65, 0xFB, 0xA3, 0xFA, 0x63, 0x87, 0x43,
+                0xCE, 0x9C, 0xF2, 0x3F, 0xF7, 0xF4, 0x99, 0x7C, 0x0B, 0x70, 0x14, 0x1D, 0x00,
+                0xCF, 0x07, 0x09, 0xE2, 0x5E, 0x29
+            ]
+        );
+        // No response MAC — card invalidates session on PICC key change.
+    }
+
+    #[test]
+    fn change_key_same_key_crypto() {
+        let session_key = AesSessionKey::new([
+            0x01, 0x02, 0x03, 0x04, 0x03, 0x95, 0x69, 0x17, 0x13, 0x14, 0x15, 0x16, 0x06, 0xEF,
+            0x0E, 0x66,
+        ]);
+        let mut session = AuthenticatedSession::new_aes(KeyNumber::new(0).unwrap(), session_key);
+
+        let new_key: [u8; 16] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0x07, 0x08,
+        ];
+
+        // CRC32 over [cmd=0xC4, key_no=0x00, new_key[0..16], key_version=0x02]
+        let crc = desfire_crc32(&{
+            let mut v = [0u8; 19];
+            v[0] = CommandCode::CHANGE_KEY.as_byte();
+            v[1] = 0x00;
+            v[2..18].copy_from_slice(&new_key);
+            v[18] = 0x02; // key version
+            v
+        });
+
+        // Plaintext: [new_key(16) || key_version(1=0x02) || CRC32(4) || zeros(11)]
+        let mut plaintext = [0u8; 32];
+        plaintext[..16].copy_from_slice(&new_key);
+        plaintext[16] = 0x02; // key version from --newver 02
+        plaintext[17..21].copy_from_slice(&crc);
+        // bytes 21..32 zero-padded
+
+        session.cbc_encrypt_in_place(&mut plaintext).unwrap();
+        assert_eq!(
+            plaintext,
+            [
+                0x30, 0x3A, 0xD0, 0x44, 0x37, 0x12, 0x04, 0x17, 0xA1, 0x73, 0x00, 0x80, 0x96,
+                0xD8, 0x93, 0x57, 0xD9, 0x92, 0x36, 0xA2, 0x55, 0x22, 0xBF, 0xA7, 0x7F, 0xF2,
+                0xED, 0xC2, 0x51, 0x66, 0x66, 0xEA
+            ]
+        );
+        // No response MAC — card invalidates session on same-key change.
+    }
+
     // Proxmark trace: `hf mfdes chfilesettings --aid 111111 --fid 00 --amode encrypt
     //   --rrights free --wrights free --rwrights free --chrights key0 --algo aes --keyno 0`
     // Session key: 01 02 03 04 D4 E8 23 47 13 14 15 16 B1 EF FA FC
