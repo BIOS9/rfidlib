@@ -19,6 +19,18 @@ const AES_KEY_1: [u8; 16] = [
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
     0x1F,
 ];
+const TDEA2_KEY_1: [u8; 16] = [
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+    0x1F,
+];
+const TDEA3_KEY_1: [u8; 24] = [
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+    0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+];
+const PICC_ROTATION_AES_KEY: [u8; 16] = [
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E,
+    0x2F,
+];
 
 #[derive(Debug, Clone)]
 pub struct IntegrationArgs {
@@ -141,6 +153,31 @@ pub fn run<T: Transport>(transport: T, args: IntegrationArgs) -> bool {
         r.print_tag_info()
     });
 
+    runner.step("Rotate PICC key through 3TDEA and AES", |r| {
+        // Authenticate with current PICC key (3TDEA zero), change to AES.
+        r.authenticate_picc()?;
+        r.desfire
+            .change_picc_key_aes(PICC_ROTATION_AES_KEY, 0x01)
+            .map_err(desfire_error)?;
+
+        // Re-authenticate with new AES key, change back to 3TDEA zero key.
+        r.current_picc_auth = Some(AuthSpec::Aes {
+            key_number: key0(),
+            key: PICC_ROTATION_AES_KEY,
+        });
+        r.authenticate_picc()?;
+        r.desfire
+            .change_picc_key_3tdea(ZERO_3TDEA_KEY)
+            .map_err(desfire_error)?;
+
+        // Verify 3TDEA zero key works; restore current_picc_auth.
+        r.current_picc_auth = Some(AuthSpec::Tdea3 {
+            key_number: key0(),
+            key: ZERO_3TDEA_KEY,
+        });
+        r.authenticate_picc()
+    });
+
     runner.run_algorithm(TestAlgorithm::Tdea2);
     runner.run_algorithm(TestAlgorithm::Tdea3);
     runner.run_algorithm(TestAlgorithm::Aes);
@@ -148,10 +185,6 @@ pub fn run<T: Transport>(transport: T, args: IntegrationArgs) -> bool {
     runner.skip(
         "Change application key settings",
         "ChangeKeySettings is not implemented in the core API yet",
-    );
-    runner.skip(
-        "Rotate PICC key through 3TDEA and AES",
-        "PICC ChangeKey is currently implemented for AES only; DES/3DES PICC key change is not implemented yet",
     );
 
     println!("\n=== Summary ===");
@@ -256,11 +289,19 @@ impl<T: Transport> Runner<T> {
                         .map_err(desfire_error)
                 });
             }
-            TestAlgorithm::Tdea2 | TestAlgorithm::Tdea3 => {
-                self.skip(
-                    &format!("Change {} key 1 with AMK/key 0", algorithm.name()),
-                    "DES/3DES ChangeKey is not implemented in the core API yet",
-                );
+            TestAlgorithm::Tdea2 => {
+                self.step("Change 2TDEA key 1 with AMK/key 0", |r| {
+                    r.desfire
+                        .change_key_2tdea(key1(), TDEA2_KEY_1, Some(ZERO_2TDEA_KEY))
+                        .map_err(desfire_error)
+                });
+            }
+            TestAlgorithm::Tdea3 => {
+                self.step("Change 3TDEA key 1 with AMK/key 0", |r| {
+                    r.desfire
+                        .change_key_3tdea(key1(), TDEA3_KEY_1, Some(ZERO_3TDEA_KEY))
+                        .map_err(desfire_error)
+                });
             }
         }
 
@@ -456,9 +497,17 @@ impl TestAlgorithm {
 
     fn app_auth(self, key_number: KeyNumber) -> AuthSpec {
         match self {
+            Self::Tdea2 if key_number == key1() => AuthSpec::Tdea2 {
+                key_number,
+                key: TDEA2_KEY_1,
+            },
             Self::Tdea2 => AuthSpec::Tdea2 {
                 key_number,
                 key: ZERO_2TDEA_KEY,
+            },
+            Self::Tdea3 if key_number == key1() => AuthSpec::Tdea3 {
+                key_number,
+                key: TDEA3_KEY_1,
             },
             Self::Tdea3 => AuthSpec::Tdea3 {
                 key_number,
