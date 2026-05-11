@@ -1,0 +1,17 @@
+[package]
+name = "tapsmith-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["tapsmith-core/std"]
+
+[dependencies]
+tapsmith-core = { path = "../tapsmith-core", default-features = false }

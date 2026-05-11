@@ -9,7 +9,7 @@ Rust crates for TapSmith, a library and toolset for RFID/NFC card technologies a
 | `tapsmith-core/` | Pure protocol logic — no_std compatible, no hardware dependency |
 | `tapsmith-pcsc/` | PC/SC hardware integration (ACR122u USB NFC reader) |
 | `tapsmith-cli/` | CLI package; provides the `tapsmith` binary |
-| `tapsmith-ffi/` | Future C ABI wrapper for Android, embedded C/C++, and other bindings |
+| `tapsmith-ffi/` | C ABI wrapper for Android, embedded C/C++, and other bindings |
 
 ## Key abstractions
 

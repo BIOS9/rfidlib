@@ -163,6 +163,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tapsmith-ffi"
+version = "0.1.0"
+dependencies = [
+ "tapsmith-core",
+]
+
+[[package]]
 name = "tapsmith-pcsc"
 version = "0.1.0"
 dependencies = [

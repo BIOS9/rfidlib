@@ -16,7 +16,7 @@ The Rust workspace is split into:
 * `tapsmith-core` - `no_std` protocol, card technology, and application logic with no hardware dependency.
 * `tapsmith-pcsc` - desktop PC/SC reader integration.
 * `tapsmith-cli` - command-line package that builds the `tapsmith` binary.
-* `tapsmith-ffi` - planned C ABI wrapper for Android JNI, embedded C/C++, and other language bindings.
+* `tapsmith-ffi` - C ABI wrapper for Android JNI, embedded C/C++, and other language bindings.
 
 ## Technology Layers
 
