@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "tapsmith-android",
     "tapsmith-core",
     "tapsmith-ffi",
     "tapsmith-pcsc",

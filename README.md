@@ -14,6 +14,7 @@ The repo currently keeps each major workspace at the top level:
 The Rust workspace is split into:
 
 * `tapsmith-core` - `no_std` protocol, card technology, and application logic with no hardware dependency.
+* `tapsmith-android` - Android JNI bridge over the C ABI.
 * `tapsmith-pcsc` - desktop PC/SC reader integration.
 * `tapsmith-cli` - command-line package that builds the `tapsmith` binary.
 * `tapsmith-ffi` - C ABI wrapper for Android JNI, embedded C/C++, and other language bindings.
