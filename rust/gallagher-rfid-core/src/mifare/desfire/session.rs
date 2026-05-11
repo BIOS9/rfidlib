@@ -54,6 +54,7 @@ struct DesState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TwoKey3DesState {
     key: TwoKey3DesSessionKey,
+    secure_messaging_key: TwoKey3DesSessionKey,
     chaining: [u8; 8],
 }
 
@@ -88,10 +89,20 @@ impl AuthenticatedSession {
 
     /// Creates session state for a successful two-key 3DES authentication.
     pub const fn new_2tdea(key_number: KeyNumber, session_key: TwoKey3DesSessionKey) -> Self {
+        Self::new_2tdea_with_secure_messaging_key(key_number, session_key, session_key)
+    }
+
+    /// Creates session state for a 2TDEA authentication whose secure messaging key differs.
+    pub const fn new_2tdea_with_secure_messaging_key(
+        key_number: KeyNumber,
+        session_key: TwoKey3DesSessionKey,
+        secure_messaging_key: TwoKey3DesSessionKey,
+    ) -> Self {
         Self {
             key_number,
             state: AlgoState::TwoKey3Des(TwoKey3DesState {
                 key: session_key,
+                secure_messaging_key,
                 chaining: [0u8; 8],
             }),
         }
@@ -207,7 +218,11 @@ impl AuthenticatedSession {
                 Ok(des_mac_to_desfire_mac(mac))
             }
             AlgoState::TwoKey3Des(s) => {
-                let mac = tdes2_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                let mac = tdes2_cbc_mac(
+                    &s.secure_messaging_key.as_bytes(),
+                    &s.chaining,
+                    input.as_slice(),
+                );
                 s.chaining = mac;
                 Ok(des_mac_to_desfire_mac(mac))
             }
@@ -244,7 +259,11 @@ impl AuthenticatedSession {
                 Ok(des_mac_to_desfire_mac(mac))
             }
             AlgoState::TwoKey3Des(s) => {
-                let mac = tdes2_cbc_mac(&s.key.as_bytes(), &s.chaining, input.as_slice());
+                let mac = tdes2_cbc_mac(
+                    &s.secure_messaging_key.as_bytes(),
+                    &s.chaining,
+                    input.as_slice(),
+                );
                 s.chaining = mac;
                 Ok(des_mac_to_desfire_mac(mac))
             }
@@ -285,7 +304,7 @@ impl AuthenticatedSession {
             AlgoState::TwoKey3Des(s) => {
                 let last_block: [u8; 8] =
                     data[data.len() - 8..].try_into().expect("length checked");
-                tdes2_cbc_decrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                tdes2_cbc_decrypt_in_place(&s.secure_messaging_key.as_bytes(), &s.chaining, data);
                 s.chaining = last_block;
                 Ok(())
             }
@@ -323,7 +342,7 @@ impl AuthenticatedSession {
                 Ok(())
             }
             AlgoState::TwoKey3Des(s) => {
-                tdes2_cbc_encrypt_in_place(&s.key.as_bytes(), &s.chaining, data);
+                tdes2_cbc_encrypt_in_place(&s.secure_messaging_key.as_bytes(), &s.chaining, data);
                 s.chaining = data[data.len() - 8..].try_into().expect("length checked");
                 Ok(())
             }
