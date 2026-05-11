@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "gallagher-rfid-core",
-    "gallagher-rfid-pcsc",
-    "gallagher-rfid-cli",
+    "tapsmith-core",
+    "tapsmith-pcsc",
+    "tapsmith-cli",
 ]
 
 [workspace.dependencies]

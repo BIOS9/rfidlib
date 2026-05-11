@@ -4,28 +4,28 @@ use std::io::Read;
 
 mod desfire_integration;
 
-use gallagher_rfid_core::gallagher::credential::GallagherCredential;
-use gallagher_rfid_core::gallagher::desfire::{GallagherDesfireKeySource, GallagherDesfireReader};
-use gallagher_rfid_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
-use gallagher_rfid_core::gallagher::mifare_classic::{
+use heapless::Vec as HeaplessVec;
+use tapsmith_core::gallagher::credential::GallagherCredential;
+use tapsmith_core::gallagher::desfire::{GallagherDesfireKeySource, GallagherDesfireReader};
+use tapsmith_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
+use tapsmith_core::gallagher::mifare_classic::{
     write_credential_to_sector, GallagherMifareClassic, CAD_AID, CREDENTIAL_AID, CREDENTIAL_KEY_A,
     CREDENTIAL_KEY_B, DEFAULT_CAD_SECTOR,
 };
-use gallagher_rfid_core::mifare::application_directory::{
+use tapsmith_core::mifare::application_directory::{
     MadAid, MadVersion, MifareApplicationDirectory, NonMadSector,
 };
-use gallagher_rfid_core::mifare::classic::{FourBlockSector, KeyProvider, KeyType, Sector, Tag};
-use gallagher_rfid_core::mifare::desfire::crypto::aes_cbc_decrypt_in_place;
-use gallagher_rfid_core::mifare::desfire::{
+use tapsmith_core::mifare::classic::{FourBlockSector, KeyProvider, KeyType, Sector, Tag};
+use tapsmith_core::mifare::desfire::crypto::aes_cbc_decrypt_in_place;
+use tapsmith_core::mifare::desfire::{
     AccessCondition, AccessRights, ApplicationId, ApplicationKeyType, Command, CommandCode,
     CommunicationMode, Desfire, FileId, FileSettings, FileSettingsDetails, FileType, FrameCodec,
     KeyNumber, KeySettings, RndA, RndA8, Transport, WrappedFraming, U24,
 };
-use gallagher_rfid_pcsc::{
+use tapsmith_pcsc::{
     acr122u::Acr122uReader,
     smart_card::{SmartCardContext, SmartCardReader},
 };
-use heapless::Vec as HeaplessVec;
 
 const CAD_SECTOR: FourBlockSector = FourBlockSector::S14;
 const CREDENTIAL_SECTOR: FourBlockSector = FourBlockSector::S15;
@@ -35,8 +35,8 @@ impl KeyProvider for ReadKeyProvider {
     fn authenticate<T: Tag>(
         &self,
         tag: &mut T,
-        sector: gallagher_rfid_core::mifare::classic::Sector,
-    ) -> Result<(), gallagher_rfid_core::mifare::classic::Error> {
+        sector: tapsmith_core::mifare::classic::Sector,
+    ) -> Result<(), tapsmith_core::mifare::classic::Error> {
         const KEYS: &[[u8; 6]] = &[
             CREDENTIAL_KEY_A,
             [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5],
@@ -47,7 +47,9 @@ impl KeyProvider for ReadKeyProvider {
                 return Ok(());
             }
         }
-        Err(gallagher_rfid_core::mifare::classic::Error::AuthenticationFailed(sector))
+        Err(tapsmith_core::mifare::classic::Error::AuthenticationFailed(
+            sector,
+        ))
     }
 }
 
@@ -56,8 +58,8 @@ impl KeyProvider for WriteKeyProvider {
     fn authenticate<T: Tag>(
         &self,
         tag: &mut T,
-        sector: gallagher_rfid_core::mifare::classic::Sector,
-    ) -> Result<(), gallagher_rfid_core::mifare::classic::Error> {
+        sector: tapsmith_core::mifare::classic::Sector,
+    ) -> Result<(), tapsmith_core::mifare::classic::Error> {
         const KEYS: &[[u8; 6]] = &[
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             [0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5],
@@ -68,13 +70,20 @@ impl KeyProvider for WriteKeyProvider {
                 return Ok(());
             }
         }
-        Err(gallagher_rfid_core::mifare::classic::Error::AuthenticationFailed(sector))
+        Err(tapsmith_core::mifare::classic::Error::AuthenticationFailed(
+            sector,
+        ))
     }
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let command = args.get(1).map_or("read", String::as_str);
+
+    if matches!(command, "--help" | "-h" | "help") {
+        print_usage(&args[0]);
+        return;
+    }
 
     let context = SmartCardContext::establish().unwrap();
     let readers: Vec<SmartCardReader> = context.get_readers().unwrap().collect();
@@ -208,10 +217,16 @@ fn main() {
             delete_desfire(card, &delete_args);
         }
         _ => {
-            eprintln!("Usage: {} [read|write|desfire|desfire-integration|desfire-format|desfire-provision|desfire-delete|desfire-changekey]", args[0]);
+            print_usage(&args[0]);
             std::process::exit(1);
         }
     }
+}
+
+fn print_usage(binary: &str) {
+    eprintln!(
+        "Usage: {binary} [read|write|desfire|desfire-integration|desfire-format|desfire-provision|desfire-delete|desfire-changekey]"
+    );
 }
 
 #[derive(Debug, Clone, Copy)]

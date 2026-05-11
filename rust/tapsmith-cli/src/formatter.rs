@@ -1,4 +1,4 @@
-use gallagher_rfid_core::mifare::classic::{
+use tapsmith_core::mifare::classic::{
     Error, FourBlockSector, KeyProvider, KeyType, Sector, Tag,
 };
 

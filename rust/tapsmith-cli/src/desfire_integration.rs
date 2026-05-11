@@ -1,12 +1,12 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 
-use gallagher_rfid_core::mifare::desfire::{
+use heapless::Vec as HeaplessVec;
+use tapsmith_core::mifare::desfire::{
     AccessCondition, AccessRights, ApplicationId, ApplicationKeyType, CommunicationMode, Desfire,
     Error, FileId, FileSettingsDetails, KeyNumber, KeySettings, RndA, RndA8, SessionKey, Transport,
     WrappedFraming, U24,
 };
-use heapless::Vec as HeaplessVec;
 
 const FILE_SIZE: U24 = U24::new(32).unwrap();
 const DATA_LEN: usize = 15;

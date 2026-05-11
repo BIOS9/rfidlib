@@ -70,32 +70,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gallagher-rfid-cli"
-version = "0.1.0"
-dependencies = [
- "gallagher-rfid-core",
- "gallagher-rfid-pcsc",
- "heapless",
-]
-
-[[package]]
-name = "gallagher-rfid-core"
-version = "0.1.0"
-dependencies = [
- "aes",
- "des",
- "heapless",
-]
-
-[[package]]
-name = "gallagher-rfid-pcsc"
-version = "0.1.0"
-dependencies = [
- "gallagher-rfid-core",
- "pcsc",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -169,6 +143,32 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "tapsmith-cli"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "tapsmith-core",
+ "tapsmith-pcsc",
+]
+
+[[package]]
+name = "tapsmith-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "des",
+ "heapless",
+]
+
+[[package]]
+name = "tapsmith-pcsc"
+version = "0.1.0"
+dependencies = [
+ "pcsc",
+ "tapsmith-core",
+]
 
 [[package]]
 name = "typenum"
