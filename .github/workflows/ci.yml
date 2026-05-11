@@ -38,4 +38,4 @@ jobs:
         run: cargo test --workspace
 
       - name: Test core (no-std)
-        run: cargo test -p gallagher-rfid-core --no-default-features
+        run: cargo test -p tapsmith-core --no-default-features

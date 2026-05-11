@@ -1,5 +1,5 @@
 [package]
-name = "gallagher-rfid-pcsc"
+name = "tapsmith-pcsc"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,5 +7,5 @@ edition = "2021"
 workspace = true
 
 [dependencies]
-gallagher-rfid-core = { path = "../gallagher-rfid-core" }
+tapsmith-core = { path = "../tapsmith-core" }
 pcsc = { workspace = true }

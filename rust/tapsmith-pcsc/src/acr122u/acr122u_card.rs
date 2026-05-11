@@ -1,4 +1,4 @@
-use gallagher_rfid_core::mifare::{
+use tapsmith_core::mifare::{
     self,
     classic::{Block, KeyType, Sector, Tag},
     desfire::{self, Frame, Transport},

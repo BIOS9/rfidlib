@@ -1,8 +1,22 @@
-# rfidlib
+# TapSmith
 
-A library for interfacing with RFID and access control technologies.
+TapSmith is a library, CLI, and app workspace for interfacing with RFID/NFC and access control technologies.
 
-This library was created with Android NFC in mind, but should also work on desktop operating systems.
+The project is Rust-first for portable protocol logic, with Android, desktop, and embedded integrations layered around that core.
+
+## Repository Layout
+
+The repo currently keeps each major workspace at the top level:
+
+* `rust/` - TapSmith Rust crates.
+* `android_app/` - Android app, also named TapSmith.
+
+The Rust workspace is split into:
+
+* `tapsmith-core` - `no_std` protocol, card technology, and application logic with no hardware dependency.
+* `tapsmith-pcsc` - desktop PC/SC reader integration.
+* `tapsmith-cli` - command-line package that builds the `tapsmith` binary.
+* `tapsmith-ffi` - planned C ABI wrapper for Android JNI, embedded C/C++, and other language bindings.
 
 ## Technology Layers
 

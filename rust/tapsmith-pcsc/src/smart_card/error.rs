@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fmt::Debug;
 
-use gallagher_rfid_core::mifare;
+use tapsmith_core::mifare;
 
 #[derive(Debug)]
 pub enum Error {

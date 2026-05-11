@@ -1,0 +1,16 @@
+[package]
+name = "tapsmith-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tapsmith"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tapsmith-pcsc = { path = "../tapsmith-pcsc" }
+tapsmith-core = { path = "../tapsmith-core" }
+heapless = { workspace = true }
