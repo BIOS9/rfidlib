@@ -1,0 +1,71 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android.yml"
+      - "android_app/**"
+      - "rust/**"
+  pull_request:
+    paths:
+      - ".github/workflows/android.yml"
+      - "android_app/**"
+      - "rust/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build and test Android app
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: "30.0.14904198"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up JDK
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@f236b35da9d031e13b1005234ebe4392ed54c580 # v5.0.0
+
+      - name: Install Android NDK
+        run: |
+          android_sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$android_sdk/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            sdkmanager="$(find "$android_sdk/cmdline-tools" -path "*/bin/sdkmanager" -type f | sort -V | tail -n 1)"
+          fi
+          if [ -z "$sdkmanager" ] || [ ! -x "$sdkmanager" ]; then
+            echo "sdkmanager not found under $android_sdk" >&2
+            exit 1
+          fi
+          "$sdkmanager" --version
+          yes | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_HOME=$android_sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$android_sdk/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Install Android Rust targets
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+      - name: Run Android checks
+        working-directory: android_app
+        run: ./gradlew :app:check
+
+      - name: Build Android debug APK with Rust JNI
+        working-directory: android_app
+        run: ./gradlew :app:assembleDebug -PbuildRustAndroid=true
