@@ -15,3 +15,12 @@ pub type Frame = Vec<u8, MAX_FRAME_SIZE>;
 pub trait Transport {
     fn transceive(&mut self, tx: &[u8], rx: &mut Frame) -> Result<(), Error>;
 }
+
+impl<T> Transport for &mut T
+where
+    T: Transport + ?Sized,
+{
+    fn transceive(&mut self, tx: &[u8], rx: &mut Frame) -> Result<(), Error> {
+        (**self).transceive(tx, rx)
+    }
+}
