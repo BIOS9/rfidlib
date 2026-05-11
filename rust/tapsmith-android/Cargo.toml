@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-tapsmith-ffi = { path = "../tapsmith-ffi" }
+tapsmith-core = { path = "../tapsmith-core" }

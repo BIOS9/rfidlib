@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -27,13 +26,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import bios9.tapsmith.rfid.DecodeResult
 import bios9.tapsmith.rfid.NfcTagReader
-import bios9.tapsmith.rfid.ReadBlock
 import bios9.tapsmith.rfid.TagReadResult
 import bios9.tapsmith.rfid.TapSmithNative
 import bios9.tapsmith.rfid.toHexString
@@ -89,15 +86,11 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     override fun onTagDiscovered(tag: Tag) {
         val result = tagReader.read(tag)
-        val decodedCredentials = result.credentialCandidates
-            .map { candidate -> candidate.toHexString() to TapSmithNative.decodeGallagher(candidate) }
-            .filter { (_, decoded) -> decoded is DecodeResult.Success }
 
         runOnUiThread {
             screenState = screenState.copy(
                 nfcStatus = "Read ${result.type} tag.",
                 lastTag = result,
-                decodedCredentials = decodedCredentials,
             )
         }
     }
@@ -107,7 +100,6 @@ data class AppState(
     val nfcStatus: String = "Checking NFC...",
     val nativeStatus: String = "Checking Rust FFI...",
     val lastTag: TagReadResult? = null,
-    val decodedCredentials: List<Pair<String, DecodeResult>> = emptyList(),
 )
 
 @Composable
@@ -133,18 +125,15 @@ fun TapSmithApp(state: AppState) {
                 item {
                     TagSummary(tag)
                 }
-                if (state.decodedCredentials.isNotEmpty()) {
+                if (tag.credentials != null) {
                     item {
-                        CredentialList(state.decodedCredentials)
+                        CredentialCard(tag.credentials)
                     }
                 }
                 if (tag.message != null) {
                     item {
                         StatusCard("Read note", tag.message)
                     }
-                }
-                items(tag.blocks.take(32)) { block ->
-                    BlockRow(block)
                 }
             }
         }
@@ -200,62 +189,46 @@ private fun TagSummary(tag: TagReadResult) {
             Text("Tag", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             DetailRow("UID", tag.id.toHexString(":"))
             DetailRow("Type", tag.type)
-            DetailRow("Size", tag.sizeBytes?.let { "$it bytes" } ?: "Unknown")
             DetailRow("Tech", tag.techList.joinToString(", "))
-            DetailRow("Blocks read", tag.blocks.size.toString())
         }
     }
 }
 
 @Composable
-private fun CredentialList(credentials: List<Pair<String, DecodeResult>>) {
+private fun CredentialCard(result: DecodeResult) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                "Decoded credentials",
+                "Gallagher credential",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            credentials.forEachIndexed { index, (source, result) ->
-                if (index > 0) {
-                    HorizontalDivider()
-                }
-                when (result) {
-                    is DecodeResult.Success -> {
-                        val credential = result.credential
-                        Text(source, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            when (result) {
+                is DecodeResult.Success -> {
+                    result.credentials.forEachIndexed { index, credential ->
+                        if (index > 0) {
+                            HorizontalDivider()
+                        }
+                        if (result.credentials.size > 1) {
+                            Text(
+                                "Credential ${index + 1}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        DetailRow("Application", credential.applicationIdHex)
                         DetailRow("Region", "${credential.regionCode} (${credential.regionCodeLetter})")
                         DetailRow("Facility", credential.facilityCode.toString())
                         DetailRow("Card", credential.cardNumber.toString())
                         DetailRow("Issue", credential.issueLevel.toString())
                     }
-                    is DecodeResult.Error -> Text("Decode failed: ${result.status}")
-                    DecodeResult.Unavailable -> Text("Native decoder unavailable")
                 }
+                is DecodeResult.Error -> Text(result.message ?: "Decode failed: ${result.status}")
+                DecodeResult.Unavailable -> Text("Native decoder unavailable")
             }
-        }
-    }
-}
-
-@Composable
-private fun BlockRow(block: ReadBlock) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = "Sector ${block.sector}, block ${block.block}",
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Text(
-                text = block.data.toHexString(" "),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium,
-            )
         }
     }
 }
