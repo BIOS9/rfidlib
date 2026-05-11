@@ -9,7 +9,7 @@ use gallagher_rfid_core::gallagher::desfire::{GallagherDesfireKeySource, Gallagh
 use gallagher_rfid_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
 use gallagher_rfid_core::gallagher::mifare_classic::{
     write_credential_to_sector, GallagherMifareClassic, CAD_AID, CREDENTIAL_AID, CREDENTIAL_KEY_A,
-    CREDENTIAL_KEY_B,
+    CREDENTIAL_KEY_B, DEFAULT_CAD_SECTOR,
 };
 use gallagher_rfid_core::mifare::application_directory::{
     MadAid, MadVersion, MifareApplicationDirectory, NonMadSector,
@@ -919,50 +919,70 @@ fn read_gallagher_tag<T: Tag + Transport>(tag: &mut T, args: &ReadArgs) {
 fn read_gallagher_classic_tag<T: Tag>(tag: &mut T) {
     // --- MAD ---
     let mad = match MifareApplicationDirectory::read_from_tag(tag, &ReadKeyProvider) {
-        Ok(m) => m,
+        Ok(m) => Some(m),
         Err(e) => {
             eprintln!("MAD read failed: {e:?}");
-            return;
+            None
         }
     };
 
     println!("=== MAD ===");
-    println!("  Version:          {:?}", mad.mad_version);
-    println!("  Multi-app:        {}", mad.multi_application_card);
-    match mad.card_publisher_sector {
-        Some(s) => println!("  Publisher sector: {}", u8::from(s)),
-        None => println!("  Publisher sector: none"),
-    }
-    println!("  Applications:");
-    for (sector, aid) in mad.iter_applications() {
-        println!(
-            "    Sector {:>2} -> AID 0x{:04X}",
-            u8::from(sector),
-            aid.to_u16()
-        );
+    if let Some(mad) = &mad {
+        println!("  Version:          {:?}", mad.mad_version);
+        println!("  Multi-app:        {}", mad.multi_application_card);
+        match mad.card_publisher_sector {
+            Some(s) => println!("  Publisher sector: {}", u8::from(s)),
+            None => println!("  Publisher sector: none"),
+        }
+        println!("  Applications:");
+        for (sector, aid) in mad.iter_applications() {
+            println!(
+                "    Sector {:>2} -> AID 0x{:04X}",
+                u8::from(sector),
+                aid.to_u16()
+            );
+        }
+    } else {
+        println!("  Not present or unreadable.");
     }
 
     // --- CAD ---
     let cad_sector = mad
-        .iter_applications()
-        .find(|(_, aid)| aid.to_u16() == CAD_AID)
-        .and_then(|(s, _)| match Sector::from(s) {
+        .as_ref()
+        .and_then(|mad| {
+            mad.iter_applications()
+                .find(|(_, aid)| aid.to_u16() == CAD_AID)
+                .map(|(sector, _)| sector)
+        })
+        .and_then(|s| match Sector::from(s) {
             Sector::FourBlock(fb) => Some(fb),
             Sector::SixteenBlock(_) => None,
         });
 
     println!("\n=== CAD ===");
-    match cad_sector {
-        None => println!("  No CAD sector in MAD."),
-        Some(sector) => {
+    let displayed_cad = cad_sector
+        .and_then(|sector| {
             match CardApplicationDirectory::read_from_tag(tag, sector, &ReadKeyProvider) {
                 Ok(cad) => {
-                    for ((rc, fc), cred_sector) in &cad.mappings {
-                        println!("  RC {rc:>2} FC {fc:>5} -> sector {cred_sector}");
-                    }
+                    println!("  Sector {} (from MAD):", sector as u8);
+                    print_classic_cad(&cad);
+                    Some(())
                 }
-                Err(e) => eprintln!("  CAD read failed: {e:?}"),
+                Err(e) => {
+                    eprintln!("  CAD read failed from MAD sector: {e:?}");
+                    None
+                }
             }
+        })
+        .is_some();
+
+    if !displayed_cad {
+        match CardApplicationDirectory::read_from_tag(tag, DEFAULT_CAD_SECTOR, &ReadKeyProvider) {
+            Ok(cad) => {
+                println!("  Sector {} (default):", DEFAULT_CAD_SECTOR as u8);
+                print_classic_cad(&cad);
+            }
+            Err(e) => eprintln!("  Default CAD sector read failed: {e:?}"),
         }
     }
 
@@ -986,6 +1006,12 @@ fn read_gallagher_classic_tag<T: Tag>(tag: &mut T) {
             }
         }
         Err(e) => eprintln!("  Credential read failed: {e:?}"),
+    }
+}
+
+fn print_classic_cad(cad: &CardApplicationDirectory) {
+    for ((rc, fc), cred_sector) in &cad.mappings {
+        println!("  RC {rc:>2} FC {fc:>5} -> sector {cred_sector}");
     }
 }
 
