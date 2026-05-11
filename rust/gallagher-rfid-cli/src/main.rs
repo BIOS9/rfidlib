@@ -5,6 +5,7 @@ use std::io::Read;
 mod desfire_integration;
 
 use gallagher_rfid_core::gallagher::credential::GallagherCredential;
+use gallagher_rfid_core::gallagher::desfire::{GallagherDesfireKeySource, GallagherDesfireReader};
 use gallagher_rfid_core::gallagher::mifare_classic::cad::CardApplicationDirectory;
 use gallagher_rfid_core::gallagher::mifare_classic::{
     write_credential_to_sector, GallagherMifareClassic, CAD_AID, CREDENTIAL_AID, CREDENTIAL_KEY_A,
@@ -98,7 +99,15 @@ fn main() {
 
     match command {
         "read" => {
-            read_gallagher_tag(&mut card);
+            let read_args = match parse_read_args(&args[2..]) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    eprintln!("read: {error}");
+                    eprintln!("Usage: {} read [--desfire] [--sitekey <32_hex>]", args[0]);
+                    return;
+                }
+            };
+            read_gallagher_tag(&mut card, &read_args);
         }
         "write" => {
             let credential = GallagherCredential::new(
@@ -495,6 +504,40 @@ fn random_bytes(len: usize) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+struct ReadArgs {
+    desfire_only: bool,
+    desfire_key_source: GallagherDesfireKeySource,
+}
+
+fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
+    let mut desfire_only = false;
+    let mut desfire_key_source = GallagherDesfireKeySource::DefaultSiteKey;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--desfire" => desfire_only = true,
+            "--sitekey" => {
+                let value = iter.next().ok_or("--sitekey requires 32 hex chars")?;
+                let bytes =
+                    parse_hex(value).ok_or_else(|| format!("--sitekey invalid hex: {value}"))?;
+                let key: [u8; 16] = bytes.as_slice().try_into().map_err(|_| {
+                    format!(
+                        "--sitekey must be 16 bytes (32 hex chars), got {}",
+                        bytes.len()
+                    )
+                })?;
+                desfire_key_source = GallagherDesfireKeySource::SiteKey(key);
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+
+    Ok(ReadArgs {
+        desfire_only,
+        desfire_key_source,
+    })
+}
+
 fn parse_optional_aes_auth(args: &[String]) -> Result<Option<AesAuthSpec>, String> {
     let mut auth: Option<AesAuthSpec> = None;
     let mut iter = args.iter();
@@ -865,7 +908,15 @@ fn delete_desfire<T: Transport>(transport: T, args: &DeleteArgs) {
     }
 }
 
-fn read_gallagher_tag<T: Tag>(tag: &mut T) {
+fn read_gallagher_tag<T: Tag + Transport>(tag: &mut T, args: &ReadArgs) {
+    if !args.desfire_only {
+        read_gallagher_classic_tag(tag);
+    }
+
+    read_gallagher_desfire_tag(tag, args);
+}
+
+fn read_gallagher_classic_tag<T: Tag>(tag: &mut T) {
     // --- MAD ---
     let mad = match MifareApplicationDirectory::read_from_tag(tag, &ReadKeyProvider) {
         Ok(m) => m,
@@ -935,6 +986,43 @@ fn read_gallagher_tag<T: Tag>(tag: &mut T) {
             }
         }
         Err(e) => eprintln!("  Credential read failed: {e:?}"),
+    }
+}
+
+fn read_gallagher_desfire_tag<T: Transport>(transport: &mut T, args: &ReadArgs) {
+    println!("\n=== DESFire Credentials ===");
+    let rnd_a = match random_rnd_a() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("  /dev/urandom: {error}");
+            return;
+        }
+    };
+
+    let mut desfire = Desfire::new(transport, WrappedFraming);
+    match GallagherDesfireReader::read_from_desfire_with_rnd_a(
+        &mut desfire,
+        args.desfire_key_source,
+        rnd_a,
+    ) {
+        Ok(result) => {
+            for credential in &result.credentials {
+                let aid = credential.application_id.as_bytes();
+                println!(
+                    "  AID {:02X}{:02X}{:02X} file {:02X} | Region {} ({}) | Facility {:>5} | Card {:>8} | Issue {}",
+                    aid[2],
+                    aid[1],
+                    aid[0],
+                    credential.file_id.as_byte(),
+                    credential.credential.region_code,
+                    credential.credential.region_code_letter(),
+                    credential.credential.facility_code,
+                    credential.credential.card_number,
+                    credential.credential.issue_level,
+                );
+            }
+        }
+        Err(error) => eprintln!("  DESFire credential read failed: {error:?}"),
     }
 }
 
