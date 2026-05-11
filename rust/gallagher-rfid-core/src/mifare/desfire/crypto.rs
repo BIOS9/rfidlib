@@ -269,16 +269,26 @@ impl TwoKey3DesSessionKey {
     }
 
     /// Derives the `DESFire` 2TDEA session key:
-    /// `RndA[0..4] || RndB[0..4] || RndA[0..4] || RndB[0..4]`.
+    /// `RndA[0..4] || RndB[0..4] || RndA[4..8] || RndB[4..8]`.
     pub fn derive(rnd_a: RndA8, rnd_b: RndB8) -> Self {
         let a = rnd_a.as_bytes();
         let b = rnd_b.as_bytes();
         let mut out = [0u8; 16];
         out[0..4].copy_from_slice(&a[0..4]);
         out[4..8].copy_from_slice(&b[0..4]);
-        out[8..12].copy_from_slice(&a[0..4]);
-        out[12..16].copy_from_slice(&b[0..4]);
+        out[8..12].copy_from_slice(&a[4..8]);
+        out[12..16].copy_from_slice(&b[4..8]);
         Self(out)
+    }
+
+    /// `DESFire` EV1 DES-family secure messaging uses the first 8-byte session half.
+    #[must_use]
+    pub const fn ev1_des_working_key(self) -> Self {
+        let b = self.0;
+        Self([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[0], b[1], b[2], b[3], b[4], b[5],
+            b[6], b[7],
+        ])
     }
 }
 
@@ -681,10 +691,30 @@ mod tests {
         assert_eq!(
             TwoKey3DesSessionKey::derive(rnd_a8, rnd_b8).as_bytes(),
             [
-                0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1, 0xB2, 0xB3, 0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1,
-                0xB2, 0xB3
+                0xA0, 0xA1, 0xA2, 0xA3, 0xB0, 0xB1, 0xB2, 0xB3, 0xA4, 0xA5, 0xA6, 0xA7, 0xB4, 0xB5,
+                0xB6, 0xB7
             ]
         );
+        // Real trace: hf mfdes getkeysettings --aid 123456 -t 2TDEA -n 0
+        // Proxmark reports the EV1 secure messaging key as 01 02 03 04 C1 BF 6D 84 repeated.
+        let pm3_rnd_a = RndA8::new([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        let pm3_rnd_b = RndB8::new([0xC1, 0xBF, 0x6D, 0x84, 0xDD, 0xFD, 0xD2, 0xC7]);
+        let pm3_session_key = TwoKey3DesSessionKey::derive(pm3_rnd_a, pm3_rnd_b);
+        assert_eq!(
+            pm3_session_key.as_bytes(),
+            [
+                0x01, 0x02, 0x03, 0x04, 0xC1, 0xBF, 0x6D, 0x84, 0x05, 0x06, 0x07, 0x08, 0xDD, 0xFD,
+                0xD2, 0xC7
+            ]
+        );
+        assert_eq!(
+            pm3_session_key.ev1_des_working_key().as_bytes(),
+            [
+                0x01, 0x02, 0x03, 0x04, 0xC1, 0xBF, 0x6D, 0x84, 0x01, 0x02, 0x03, 0x04, 0xC1, 0xBF,
+                0x6D, 0x84
+            ]
+        );
+
         assert_eq!(
             ThreeKey3DesSessionKey::derive(rnd_a, rnd_b).as_bytes(),
             [
