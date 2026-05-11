@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "tapsmith-core",
+    "tapsmith-ffi",
     "tapsmith-pcsc",
     "tapsmith-cli",
 ]
