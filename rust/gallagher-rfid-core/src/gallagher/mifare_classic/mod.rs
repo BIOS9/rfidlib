@@ -20,6 +20,11 @@ pub const CREDENTIAL_KEY_B: [u8; 6] = [0xB7, 0xBF, 0x0C, 0x13, 0x06, 0x6E];
 /// Access bits for credential sectors: Key A read, Key B read/write all blocks.
 pub const CREDENTIAL_ACCESS_BITS: [u8; 3] = [0x78, 0x77, 0x88];
 
+/// Default sector used by Gallagher for the MIFARE Classic CAD when no MAD is present.
+pub const DEFAULT_CAD_SECTOR: FourBlockSector = FourBlockSector::S14;
+/// Default sector used by Gallagher for a MIFARE Classic credential when no CAD is present.
+pub const DEFAULT_CREDENTIAL_SECTOR: FourBlockSector = FourBlockSector::S15;
+
 /// "www.cardax.com  " sentinel written to block 1 of every credential sector.
 const CARDAX_SENTINEL: &[u8; 16] = b"www.cardax.com  ";
 
@@ -62,61 +67,95 @@ pub struct GallagherMifareClassic {
 impl GallagherMifareClassic {
     /// Read all Gallagher credentials from a tag.
     ///
-    /// Finds credential sectors via CAD if present, otherwise falls back to scanning the MAD for
-    /// credential AIDs. Sectors that fail to parse are silently skipped (matching Kotlin behaviour).
+    /// Finds credential sectors via CAD if present, then MAD credential AIDs, then Gallagher's
+    /// default credential sector. Sectors that fail to parse are silently skipped.
     pub fn read_from_tag<T: Tag>(
         tag: &mut T,
         key_provider: &impl KeyProvider,
     ) -> Result<Self, Error> {
-        let mad = MifareApplicationDirectory::read_from_tag(tag, key_provider)?;
-
-        // Find the CAD sector in the MAD (AID 0x4811).
-        let cad_sector: Option<NonMadSector> = mad
-            .iter_applications()
-            .find(|(_, aid)| aid.to_u16() == CAD_AID)
-            .map(|(sector, _)| sector);
-
-        // Collect credential sector numbers.
-        let credential_sectors: Vec<u8, 38> = if let Some(cad_non_mad) = cad_sector {
-            // Use CAD to find credential sectors.
-            let cad_four_block = match cad_non_mad.into() {
-                Sector::FourBlock(s) => s,
-                Sector::SixteenBlock(_) => {
-                    // CAD must be in a four-block sector (sectors 1–31).
-                    return Err(Error::InvalidCadCrc(cad_non_mad.into()));
-                }
-            };
-
-            let cad = CardApplicationDirectory::read_from_tag(tag, cad_four_block, key_provider)?;
-
-            cad.mappings.values().copied().collect()
-        } else {
-            // No CAD — scan MAD for credential AIDs (0x4812).
-            mad.iter_applications()
-                .filter(|(_, aid)| aid.to_u16() == CREDENTIAL_AID)
-                .map(|(sector, _)| u8::from(sector))
-                .collect()
-        };
-
-        if credential_sectors.is_empty() {
-            return Err(Error::CredentialNotFound);
-        }
-
-        // Read each credential sector, silently skipping failures.
+        let mad = MifareApplicationDirectory::read_from_tag(tag, key_provider).ok();
         let mut credentials: Vec<(NonMadSector, GallagherCredential), 12> = Vec::new();
-        for sector_num in &credential_sectors {
-            let Ok(sector) = Sector::try_from(*sector_num) else {
-                continue;
-            };
-            let Ok(non_mad) = NonMadSector::try_from(sector) else {
-                continue;
-            };
-            if let Ok(cred) = read_credential_sector(tag, sector, key_provider) {
-                let _ = credentials.push((non_mad, cred));
+
+        if let Some(credential_sectors) =
+            read_mad_cad_credential_sectors(tag, key_provider, mad.as_ref())
+        {
+            read_credential_sectors(tag, key_provider, &credential_sectors, &mut credentials);
+            if !credentials.is_empty() {
+                return Ok(Self { credentials });
             }
         }
 
+        if let Ok(cad) =
+            CardApplicationDirectory::read_from_tag(tag, DEFAULT_CAD_SECTOR, key_provider)
+        {
+            let credential_sectors: Vec<u8, 12> = cad.mappings.values().copied().collect();
+            read_credential_sectors(tag, key_provider, &credential_sectors, &mut credentials);
+            if !credentials.is_empty() {
+                return Ok(Self { credentials });
+            }
+        }
+
+        if let Some(mad) = &mad {
+            let credential_sectors: Vec<u8, 38> = mad
+                .iter_applications()
+                .filter(|(_, aid)| aid.to_u16() == CREDENTIAL_AID)
+                .map(|(sector, _)| u8::from(sector))
+                .collect();
+            read_credential_sectors(tag, key_provider, &credential_sectors, &mut credentials);
+            if !credentials.is_empty() {
+                return Ok(Self { credentials });
+            }
+        }
+
+        let credential_sectors: Vec<u8, 1> =
+            [DEFAULT_CREDENTIAL_SECTOR as u8].into_iter().collect();
+        read_credential_sectors(tag, key_provider, &credential_sectors, &mut credentials);
+        if credentials.is_empty() {
+            return Err(Error::CredentialNotFound);
+        }
+
         Ok(Self { credentials })
+    }
+}
+
+fn read_mad_cad_credential_sectors<T: Tag>(
+    tag: &mut T,
+    key_provider: &impl KeyProvider,
+    mad: Option<&MifareApplicationDirectory>,
+) -> Option<Vec<u8, 12>> {
+    let cad_sector = mad?
+        .iter_applications()
+        .find(|(_, aid)| aid.to_u16() == CAD_AID)
+        .map(|(sector, _)| sector)?;
+
+    let cad_four_block = match cad_sector.into() {
+        Sector::FourBlock(s) => s,
+        Sector::SixteenBlock(_) => return None,
+    };
+
+    let cad = CardApplicationDirectory::read_from_tag(tag, cad_four_block, key_provider).ok()?;
+    Some(cad.mappings.values().copied().collect())
+}
+
+fn read_credential_sectors<T: Tag, const N: usize>(
+    tag: &mut T,
+    key_provider: &impl KeyProvider,
+    credential_sectors: &Vec<u8, N>,
+    credentials: &mut Vec<(NonMadSector, GallagherCredential), 12>,
+) {
+    for sector_num in credential_sectors {
+        let Ok(sector) = Sector::try_from(*sector_num) else {
+            continue;
+        };
+        let Ok(non_mad) = NonMadSector::try_from(sector) else {
+            continue;
+        };
+        if credentials.iter().any(|(existing, _)| *existing == non_mad) {
+            continue;
+        }
+        if let Ok(cred) = read_credential_sector(tag, sector, key_provider) {
+            let _ = credentials.push((non_mad, cred));
+        }
     }
 }
 
@@ -194,4 +233,111 @@ fn read_credential_sector<T: Tag>(
     let credential_bytes: &[u8; 8] = block0[..8].try_into().unwrap();
     GallagherCredential::decode(credential_bytes)
         .map_err(|_| Error::InvalidCredential(u8::from(Block::from(sector)) / 4))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mifare::classic::{Error as ClassicError, KeyType};
+
+    struct NoopKeyProvider;
+
+    impl KeyProvider for NoopKeyProvider {
+        fn authenticate<T: Tag>(&self, _tag: &mut T, _sector: Sector) -> Result<(), ClassicError> {
+            Ok(())
+        }
+    }
+
+    struct MockTag {
+        blocks: [[u8; 16]; 64],
+    }
+
+    impl MockTag {
+        const fn new() -> Self {
+            Self {
+                blocks: [[0u8; 16]; 64],
+            }
+        }
+
+        fn write_cad_sector(&mut self, sector: FourBlockSector, cad: &CardApplicationDirectory) {
+            let data = cad.to_bytes();
+            self.blocks[usize::from(u8::from(sector.block(FourBlockOffset::B0)))]
+                .copy_from_slice(&data[0..16]);
+            self.blocks[usize::from(u8::from(sector.block(FourBlockOffset::B1)))]
+                .copy_from_slice(&data[16..32]);
+            self.blocks[usize::from(u8::from(sector.block(FourBlockOffset::B2)))]
+                .copy_from_slice(&data[32..48]);
+        }
+    }
+
+    impl Tag for MockTag {
+        fn authenticate(
+            &mut self,
+            _sector: Sector,
+            _key: &[u8; 6],
+            _key_type: KeyType,
+        ) -> Result<(), ClassicError> {
+            Ok(())
+        }
+
+        fn read_block(&mut self, block: Block) -> Result<[u8; 16], ClassicError> {
+            Ok(self.blocks[usize::from(u8::from(block))])
+        }
+
+        fn write_block(&mut self, block: Block, data: [u8; 16]) -> Result<(), ClassicError> {
+            self.blocks[usize::from(u8::from(block))] = data;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn reads_default_credential_sector_without_mad_or_cad() {
+        let mut tag = MockTag::new();
+        let credential = GallagherCredential::new(1, 123, 123_456, 1).unwrap();
+        write_credential_to_sector(
+            &mut tag,
+            DEFAULT_CREDENTIAL_SECTOR,
+            &credential,
+            &NoopKeyProvider,
+            &CREDENTIAL_KEY_A,
+            &CREDENTIAL_KEY_B,
+        )
+        .unwrap();
+
+        let result = GallagherMifareClassic::read_from_tag(&mut tag, &NoopKeyProvider).unwrap();
+
+        assert_eq!(result.credentials.len(), 1);
+        assert_eq!(
+            u8::from(result.credentials[0].0),
+            DEFAULT_CREDENTIAL_SECTOR as u8
+        );
+        assert_eq!(result.credentials[0].1, credential);
+    }
+
+    #[test]
+    fn reads_default_cad_sector_without_mad() {
+        let mut tag = MockTag::new();
+        let credential_sector = FourBlockSector::S13;
+        let credential = GallagherCredential::new(2, 12_345, 6_789, 3).unwrap();
+        write_credential_to_sector(
+            &mut tag,
+            credential_sector,
+            &credential,
+            &NoopKeyProvider,
+            &CREDENTIAL_KEY_A,
+            &CREDENTIAL_KEY_B,
+        )
+        .unwrap();
+        let cad = CardApplicationDirectory::new([(
+            (credential.region_code, credential.facility_code),
+            credential_sector as u8,
+        )]);
+        tag.write_cad_sector(DEFAULT_CAD_SECTOR, &cad);
+
+        let result = GallagherMifareClassic::read_from_tag(&mut tag, &NoopKeyProvider).unwrap();
+
+        assert_eq!(result.credentials.len(), 1);
+        assert_eq!(u8::from(result.credentials[0].0), credential_sector as u8);
+        assert_eq!(result.credentials[0].1, credential);
+    }
 }
