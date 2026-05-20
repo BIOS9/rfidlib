@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val rustCrateDir = rootProject.layout.projectDirectory.dir("../rust/tapsmith-android")
+val rustCrateDir = rootProject.layout.projectDirectory.dir("../rust/tapsmith-jni")
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/jniLibs/rust")
 val androidMinSdk = 24
 val androidRustAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")

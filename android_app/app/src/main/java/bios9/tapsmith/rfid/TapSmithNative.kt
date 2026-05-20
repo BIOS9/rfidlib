@@ -24,7 +24,7 @@ object TapSmithNative {
     private const val FIELDS_PER_CREDENTIAL = 5
 
     val isAvailable: Boolean = runCatching {
-        System.loadLibrary("tapsmith_android")
+        System.loadLibrary("tapsmith_jni")
     }.isSuccess
 
     external fun abiVersion(): Int

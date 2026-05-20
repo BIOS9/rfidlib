@@ -1,5 +1,5 @@
 [package]
-name = "tapsmith-android"
+name = "tapsmith-jni"
 version = "0.1.0"
 edition = "2021"
 

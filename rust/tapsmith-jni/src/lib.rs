@@ -20,7 +20,7 @@ type jmethodID = *mut c_void;
 type jbyteArray = *mut c_void;
 type jintArray = *mut c_void;
 
-const TAPSMITH_ANDROID_ABI_VERSION: jint = 1;
+const TAPSMITH_JNI_ABI_VERSION: jint = 1;
 const STATUS_NULL_POINTER: jint = -1;
 const STATUS_INVALID_LENGTH: jint = -2;
 const STATUS_INVALID_CREDENTIAL: jint = -3;
@@ -337,7 +337,7 @@ pub unsafe extern "system" fn Java_bios9_tapsmith_rfid_TapSmithNative_abiVersion
     _env: *mut JNIEnv,
     _class: jclass,
 ) -> jint {
-    TAPSMITH_ANDROID_ABI_VERSION
+    TAPSMITH_JNI_ABI_VERSION
 }
 
 #[no_mangle]
